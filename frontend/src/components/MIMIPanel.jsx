@@ -108,15 +108,15 @@ export default function MIMIPanel({ kState, catastrophe }) {
           </div>
         </div>
         <div style={{
-          background: catastrophe ? '#2A0000' : '#0F1A00',
-          border: `1px solid ${catastrophe ? '#FF3B30' : '#32D74B'}`,
+          background: collapse ? '#2A0000' : catastrophe ? '#1A0A00' : '#0F1A00',
+          border: `1px solid ${collapse ? '#FF3B30' : catastrophe ? '#FF9F0A' : '#32D74B'}`,
           padding: '3px 10px',
           fontSize: 9,
-          color: catastrophe ? '#FF3B30' : '#32D74B',
+          color: collapse ? '#FF3B30' : catastrophe ? '#FF9F0A' : '#32D74B',
           letterSpacing: '0.12em',
           fontWeight: 700,
         }}>
-          {catastrophe ? 'CATASTROPHE ρ > 0.80' : 'KERNEL ACTIVE'}
+          {collapse ? 'COLLAPSE ρ ≥ 0.85' : catastrophe ? 'DIVERSION ρ > 0.80' : 'KERNEL ACTIVE'}
         </div>
       </div>
 
