@@ -64,28 +64,18 @@ export default function FailureTable({ kState }) {
             </tr>
           </thead>
           <tbody>
-            {paginated.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={{ textAlign: 'center', color: '#555', fontSize: 10, padding: 16 }}>
-                  NO DATA
-                </td>
-              </tr>
-            ) : (
-              paginated.map((row, i) => (
-                <tr key={i} data-testid={`failure-row-${i}`}>
-                  <td style={{ color: '#64D2FF' }}>{row.id}</td>
-                  <td>
-                    <span style={{
-                      background: '#1A0A00', color: '#FF9F0A', fontSize: 9,
-                      padding: '1px 5px', fontWeight: 700
-                    }}>{row.hub}</span>
-                  </td>
-                  <td style={{ color: '#A1A1AA', fontSize: 10 }}>{row.mode}</td>
-                  <td style={{ color: '#FFB340' }}>${row.cost}</td>
-                  <td style={{ color: '#555' }}>{row.weight?.toLocaleString()}</td>
-                </tr>
-              ))
-            )}
+            {paginated.length === 0
+              ? <tr><td colSpan={5} style={{ textAlign: 'center', color: '#555', fontSize: 10, padding: 16 }}>NO DATA</td></tr>
+              : paginated.map((row, i) => (
+                  <tr key={i} data-testid={`failure-row-${i}`}>
+                    <td style={{ color: '#64D2FF' }}>{row.id}</td>
+                    <td><span style={{ background: '#1A0A00', color: '#FF9F0A', fontSize: 9, padding: '1px 5px', fontWeight: 700 }}>{row.hub}</span></td>
+                    <td style={{ color: '#A1A1AA', fontSize: 10 }}>{row.mode}</td>
+                    <td style={{ color: '#FFB340' }}>${row.cost}</td>
+                    <td style={{ color: '#555' }}>{row.weight?.toLocaleString()}</td>
+                  </tr>
+                ))
+            }
           </tbody>
         </table>
       </div>
