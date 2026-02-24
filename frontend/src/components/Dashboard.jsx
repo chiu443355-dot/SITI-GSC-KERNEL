@@ -83,21 +83,22 @@ export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh 
         {/* LEFT: KPI Cards */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <KPICard label="HUB UTILIZATION ρ" value={kState?.rho?.toFixed(4)} unit=""
-            color={catastrophe ? '#FF3B30' : (kState?.rho > 0.75 ? '#FF9F0A' : '#FFB340')}
+            color={collapse ? '#FF3B30' : catastrophe ? '#FF9F0A' : '#FFB340'}
             testId="kpi-rho" />
-          <KPICard label="LOGIC HEALTH Φ(ρ)" value={kState?.phi?.toFixed(4)} unit=""
-            color="#64D2FF" testId="kpi-phi" />
-          <KPICard label="HIGH IMPORTANCE FAILURES" value={kState?.inverse_reliability?.failure_count?.toLocaleString()} unit="units"
-            color="#FF3B30" testId="kpi-failures" />
-          <KPICard label="LEAKAGE TOTAL" value={`$${kState?.inverse_reliability?.leakage_total?.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} unit=""
+          <KPICard label="INSTABILITY INDEX Φ(ρ)" value={kState?.phi?.toFixed(4)} unit={`k=${kState?.k_decay ?? 20} · ρ_c=${kState?.critical_rho?.toFixed(2) ?? '0.85'}`}
+            color={kState?.phi > 0.5 ? '#FF3B30' : kState?.phi > 0.3 ? '#FF9F0A' : '#32D74B'}
+            testId="kpi-phi" />
+          <KPICard label="QUEUE WAIT  W_q" value={kState?.wq?.toFixed(3)} unit="norm. units"
+            color={kState?.wq > 4 ? '#FF3B30' : '#64D2FF'} testId="kpi-wq" />
+          <KPICard label="HIGH IMP. FAILURE RATE" value={`${((kState?.inverse_reliability?.failure_rate ?? 0) * 100).toFixed(1)}%`} unit={`${kState?.inverse_reliability?.failure_count ?? 0} of ${kState?.inverse_reliability?.total_high ?? 0}`}
+            color="#FF3B30" testId="kpi-failure-rate" />
+          <KPICard label="LEAKAGE  $1.20 + $2.74" value={`$${kState?.inverse_reliability?.leakage_total?.toLocaleString('en-US', { minimumFractionDigits: 0 }) ?? '0'}`} unit="total priority leakage"
             color="#FF9F0A" testId="kpi-leakage" />
-          <KPICard label="ANNUALIZED EXPOSURE" value="$2.81M" unit="BASELINE"
+          <KPICard label="ANNUALIZED EXPOSURE" value="$2.81M" unit="AUDIT BASELINE"
             color="#FF3B30" testId="kpi-exposure" />
-          <KPICard label="KALMAN T+1 PREDICTION" value={kState?.kalman?.rho_t1?.toFixed(4)} unit=""
-            color={kState?.catastrophe_predicted ? '#FF3B30' : '#32D74B'}
+          <KPICard label="KALMAN T+1 · 45-MIN" value={kState?.kalman?.rho_t1?.toFixed(4)} unit=""
+            color={kState?.collapse_predicted ? '#FF3B30' : kState?.catastrophe_predicted ? '#FF9F0A' : '#32D74B'}
             testId="kpi-kalman-t1" />
-          <KPICard label="DATASET RECORDS" value={kState?.n_total?.toLocaleString()} unit="shipments"
-            color="#A1A1AA" testId="kpi-records" />
         </div>
 
         {/* CENTER: MIMI Panel + Charts */}
