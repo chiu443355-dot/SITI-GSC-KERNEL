@@ -7,7 +7,8 @@ import FailureTable from "./FailureTable";
 import DataInjection from "./DataInjection";
 
 export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh }) {
-  const catastrophe = kState?.catastrophe;
+  const catastrophe = kState?.catastrophe;   // ρ > 0.80
+  const collapse = kState?.collapse;          // ρ ≥ 0.85
 
   if (loading && !kState) {
     return (
