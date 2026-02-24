@@ -107,10 +107,11 @@ export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh 
           <HubCharts kState={kState} />
         </div>
 
-        {/* RIGHT: Failure Table + Recovery + Kalman */}
+        {/* RIGHT: Recovery + Kalman + Routing + Failure Table */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <RecoveryWidget ticker={ticker} kState={kState} />
           <KalmanWidget kState={kState} />
+          <RoutingWidget kState={kState} />
           <FailureTable kState={kState} />
         </div>
       </div>
