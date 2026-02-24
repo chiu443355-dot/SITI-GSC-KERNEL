@@ -1,4 +1,11 @@
-# NodeGuard GSC — PRD
+# SITI Intelligence — PRD
+
+## Brand Identity
+- **Name**: SITI Intelligence
+- **Tagline**: "Logic for the Paradox // Powered by MIMI"
+- **Symbol**: Sigmoid S-curve (SVG) — represents logistics flow from stable to chaotic
+- **Message**: "We control the curve."
+- **Palette**: Bloomberg Amber (#FFB340) + Cyber Blue (#64D2FF) on Pure Black (#050505)
 
 ## Problem Statement
 Build "NodeGuard GSC," a SaaS Web Dashboard for predictive logistics recovery. Uses attached Train-Train.csv as initial industrial dataset for Safexpress Case #02028317. Core logic: MIMI Kernel with Hub Utilization (ρ), Sigmoidal Decay Φ(ρ), Inverse Reliability Paradox, Kalman Filter T+1 prediction.
