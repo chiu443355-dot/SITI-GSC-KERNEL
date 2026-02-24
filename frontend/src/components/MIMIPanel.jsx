@@ -104,7 +104,7 @@ export default function MIMIPanel({ kState, catastrophe }) {
             MIMI KERNEL — MATHEMATICAL STATE OBSERVER
           </div>
           <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.1em', marginTop: 2 }}>
-            MACHINE INTELLIGENCE · MATHEMATICAL INFERENCE ENGINE
+            SITI INTELLIGENCE · MATHEMATICAL INFERENCE ENGINE
           </div>
         </div>
         <div style={{
