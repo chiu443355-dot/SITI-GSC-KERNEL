@@ -241,12 +241,11 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
       {/* RIGHT: PDF Export */}
       <div>
         <div style={{ fontSize: 9, color: '#A1A1AA', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 8 }}>
-          EXPORT FORENSIC AUDIT REPORT
+          EXPORT FORENSIC STATE AUDIT REPORT
         </div>
         <div style={{ fontSize: 9, color: '#555', marginBottom: 12, lineHeight: 1.6 }}>
-          Generate a board-ready PDF with full MIMI Kernel analysis, Inverse Reliability findings,
-          and <span style={{ color: '#32D74B' }}>Mission LiFE ESG Compliance Certification</span>.
-          Ready to email to your Board of Directors.
+          Generate a board-ready PDF: <em>SITI: Forensic State Audit [Case #02028317]</em> with full MIMI Kernel analysis,
+          Inverse Reliability findings, and <span style={{ color: '#32D74B' }}>Mission LiFE ESG Compliance Certification</span>.
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
