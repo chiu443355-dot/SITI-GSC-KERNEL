@@ -14,7 +14,7 @@ Build "NodeGuard GSC," a SaaS Web Dashboard for predictive logistics recovery. U
 - **Frontend**: React 19 + Tailwind CSS + Recharts + KaTeX + react-fast-marquee
 - **Backend**: FastAPI + scikit-learn + NumPy/Pandas (in-memory MIMI Kernel)
 - **Database**: MongoDB (minimal use, kernel state is in-memory)
-- **URL**: https://hub-utilization.preview.emergentagent.com
+- **URL**: https://siti-logistics-hub.preview.emergentagent.com
 
 ## User Personas
 - C-suite executives reviewing forensic audit reports

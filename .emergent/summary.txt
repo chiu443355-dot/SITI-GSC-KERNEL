@@ -1,0 +1,137 @@
+<analysis>**original_problem_statement:**
+The user wants to build SITI Intelligence (originally NodeGuard GSC), a SaaS Web Dashboard for predictive logistics recovery.
+
+**PRODUCT REQUIREMENTS:**
+
+**Core Logic (MIMI Intelligence Engine):**
+1.  **State Observer:** A  class to calculate real-time Hub Utilization ($\rho$).
+2.  **Sigmoidal Priority Decay ($\Phi$):** Implement the instability function $\Phi(\rho) = \frac{1}{1 + e^{-k(\rho - \rho_c)}}$ where $\rho_c = 0.85$ and  = 20$.
+3.  **Predictive State Estimation (T+1):** Use a Linear Kalman Filter to predict hub utilization ($\rho$) for the next hour (or 45 minutes).
+4.  **Inverse Reliability Paradox:** Identify high-importance shipments that were not delivered on time and calculate the .94 Leakage Seed per failure.
+5.  **Fiscal Recovery:** Track revenue saved by preventing the leakage.
+
+**Dashboard Features (React/FastAPI):**
+1.  **App Title & Branding:** SITI Intelligence with the tagline 'Logic for the Paradox // Powered by MIMI'. The logo is a vertical sigmoid curve.
+2.  **UI Aesthetic:** Industrial, dark-mode (#050505) with specific accent colors (Amber #FFB340, Blue #64D2FF). Prominently display all LaTeX formulas.
+3.  **Executive HUD:** Display Total Annualized Exposure (initially .81M).
+4.  **Catastrophe Alert:** Implement a two-level alert system:
+    *    prediction $\mathbb{E}[\rho(T+1)] > 0.80$: PREEMPTIVE DIVERSION PROTOCOL INITIATED.
+    *   Current $\rho \geq 0.85$: A full-screen high-contrast alert: UTILIZATION COLLAPSE: SIGMOIDAL DECAY TRIGGERED.
+5.  **Genius Reset:** A Data Injection module for CSV upload. On upload, the system must show a System Calibrating overlay, wipe historical weights, perform a fresh logistic regression, and recalculate thresholds.
+6.  **Charts & Visualizations:**
+    *   Bar Chart: 'Average Delay' per Warehouse Block.
+    *   Pie Chart: Distribution of 'Product Importance' for shipments in the 'Red Zone' ($\rho > 0.80$).
+    *   Labels and tooltips must be clearly visible against the dark background. The  threshold must be clearly marked in red on all graphs.
+7.  **PDF Export:** A function to Export Forensic Audit as a PDF, which includes the SITI header and recovery summary.
+
+**User's preferred language**: English
+
+**what currently exists?**
+A full-stack React and FastAPI application named SITI Intelligence is in place. The backend implements the core MIMI Intelligence Engine which processes an uploaded CSV file in-memory to calculate logistics metrics like hub utilization ($\rho$), sigmoidal decay ($\Phi$), and a Kalman filter prediction. The React frontend displays these metrics on a sophisticated dark-mode dashboard featuring KPI cards, a catastrophe alert system, a recovery counter, and several charts from the Recharts library. The application has undergone one major feature update and a complete rebrand from its original name, NodeGuard GSC.
+
+**Last working item**:
+- **Last item agent was working:** The agent began a major overhaul based on the user's SYSTEM EMERGENCY request. This involves fixing a broken PDF export feature, improving the visibility of chart elements, scrubbing the last remnants of the old NodeGuard branding, refining the CSV upload (Genius Reset) flow, and adding a critical data threshold marker to graphs. The agent was in the middle of executing a large parallel  command to apply these changes across the codebase.
+- **Status:** IN PROGRESS
+- **Agent Testing Done:** N
+- **Which testing method agent to use?** Both. The PDF export and extensive UI changes require frontend testing (screenshot tool and possibly testing agent). The logic changes for thresholds and data processing should be verified on the backend (curl).
+- **User Testing Done:** N
+
+**All Pending/In progress Issue list**:
+-   **Issue 1:** The SYSTEM EMERGENCY: RECONSTRUCT SITI FOR GLOBAL LAUNCH task is not complete. (Priority: P0)
+
+**Issues Detail:**
+-   **Issue 1: Fix broken PDF Export and implement UI/UX overhaul**
+    -   **Attempted fixes:** The agent has initiated a parallel  call to address this and other related issues. The outcome of this action is not yet known.
+    -   **Next debug checklist:**
+        1.  Verify the result of the last  tool call.
+        2.  **PDF Fix:** Check  to see if  and  are loaded via a stable CDN script. If not, modify  to import them directly, removing lazy loading. Test the Export Forensic Audit button.
+        3.  **UI Visibility:** In , inspect the  component. Ensure  is set, and label/legend text colors are forced to . Check that tooltips have a background of  and text of .
+        4.  **Branding:** Globally search for any remaining instances of NodeGuard. Check the footer in  to ensure 'MIMI Kernel' is changed to 'MIMI Intelligence Engine v2.0'. Verify the favicon has been updated.
+        5.  **Genius Reset:** In  and , implement a System Calibrating overlay that appears after a CSV is uploaded and before new data is rendered.
+        6.  **Data Integrity:** In , verify that a red line or marker indicating the  threshold is present on relevant graphs.
+    -   **Why fix this issue and what will be achieved with the fix?** This will fix a critical broken feature (PDF export), improve UI/UX according to user specification, complete the product rebrand, and enhance the Genius feel of the core data reset feature, making the application ready for a Global Launch.
+    -   **Status:** IN PROGRESS
+    -   **Is recurring issue?** N
+    -   **Should Test frontend/backend/both after fix?** Both
+    -   **Blocked on other issue:** None
+
+**In progress Task List**:
+-   **Task 1: Complete and Verify System Overhaul**
+    -   **Where to resume:** The agent must analyze the output of the in-progress  tool call. Based on the results, it needs to proceed with the debugging checklist outlined in All Pending/In progress Issue list to ensure every part of the user's request is fulfilled.
+    -   **What will be achieved with this?** A fully functional, rebranded, and visually polished application that meets all of the user's latest requirements.
+    -   **Status:** IN PROGRESS
+    -   **Should Test frontend/backend/both after fix?** Both
+    -   **Blocked on something:** Waiting for the current tool call to complete.
+
+**Upcoming and Future Tasks**
+N/A. All focus is on completing the current SYSTEM EMERGENCY request.
+
+**Completed work in this session**
+-   **Initial Application Build:** Created the full-stack React/FastAPI project from scratch.
+-   **Core Logic Implementation:** Implemented the MIMI Kernel with Sigmoidal Decay, Kalman Filter, and fiscal leakage calculations in .
+-   **Dashboard UI:** Built the main dashboard with a dark-mode theme, KPI cards, catastrophe alerts, and a recovery counter.
+-   **Chart Enhancement:** Updated charts to show 'Average Delay' per warehouse block and 'Product Importance' for at-risk shipments in .
+-   **Full Rebranding:** Changed the application name, logo, and color scheme from NodeGuard GSC to SITI Intelligence across all relevant frontend and backend files.
+
+**Code Architecture**
+
+
+**Key Technical Concepts**
+-   **Backend:** FastAPI, Pandas for data manipulation, Scikit-learn for logistic regression, NumPy for numerical operations.
+-   **Frontend:** React, TailwindCSS for styling, Recharts for charting, Axios for API calls, jsPDF for PDF generation.
+-   **Core Logic:** In-memory data processing of a CSV file. The application is stateless between sessions but stateful during a session. It uses mathematical models (Sigmoid function, Kalman Filter) for predictive analysis.
+
+**key DB schema**
+-   N/A. The application is database-free and processes data from a user-uploaded CSV file in memory.
+
+**changes in tech stack**
+-   None.
+
+**All files of reference**
+-   : Contains all backend logic, including the MIMI Kernel and API endpoints.
+-   : The main component that assembles the entire UI.
+-   : Contains the Recharts components that need a UI overhaul.
+-   : Contains the broken PDF export functionality.
+-   : The entry point for the frontend, where the  library fix might be applied.
+-   : The document tracking the project's requirements and progress.
+
+**key api endpoints**
+-   : Fetches the complete state of the logistics simulation from the backend.
+-   : Handles new data uploads and triggers the Genius Reset.
+
+**Critical Info for New Agent**
+-   The user's latest request is a multi-part emergency fix. You must address all points: PDF export, UI visibility, branding, Genius Reset overlay, and data threshold markers.
+-   The agent you are taking over from has already started a large parallel file modification. Your first step is to analyze the results of that action and then systematically verify each required change.
+-   The application logic is based on specific mathematical formulas and a particular logistics case study. Refer to the problem statement for the details of these formulas.
+-   The UI/UX is a high priority for the user. Pay close attention to colors, fonts, and the overall high-tech feel.
+-   The PDF export feature is broken due to a JavaScript loading issue. The user suggested removing lazy-loading or using a CDN script tag in  as a potential fix.
+
+**documents and test reports created in this job**
+-   
+-   
+
+**Last 10 User Messages and any pending HUMAN messages**
+1.  **SYSTEM EMERGENCY (LATEST & PENDING):** User requested a major overhaul: Fix broken PDF export, fix chart visibility (labels, tooltips), scrub all NodeGuard remnants, add a Calibrating overlay to the Genius Reset, and mark the  Kill Zone on graphs. **Status: IN PROGRESS**
+2.  **Rebrand to SITI:** User requested a full rebrand to SITI Intelligence with a new tagline, sigmoid logo, and updated UI text. **Status: Mostly Completed, final cleanup pending.**
+3.  **Chart & Logic Refinement:** User requested to group charts by , add an Average Delay bar chart, a Red Zone Importance pie chart, and update the core math ( for Sigmoid). **Status: Completed.**
+4.  **Initial build request:** The original problem statement to build the NodeGuard GSC application. **Status: Completed.**
+
+**Project Health Check:**
+-   **Broken:**
+    -   PDF Export ( library loading fails).
+    -   Chart label/legend visibility in  components.
+
+**3rd Party Integrations**
+-   None.
+
+**Testing status**
+-   **Testing agent used after significant changes:** YES (once, after the initial build).
+-   **Troubleshoot agent used after agent stuck in loop:** NO
+-   **Test files created:** None.
+-   **Known regressions:** The PDF export functionality is confirmed to be broken.
+
+**Credentials to test flow:**
+N/A. The application does not have an authentication flow.
+
+**What agent forgot to execute**
+The agent is currently in the process of executing the latest user request. The main task for the next agent is to ensure every single sub-task from the user's SYSTEM EMERGENCY message is fully implemented and verified.</analysis>
