@@ -92,16 +92,17 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
     doc.setTextColor(255, 179, 64);
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
-    doc.text('MIMI KERNEL — MATHEMATICAL FORMULATION', 14, y);
+    doc.text('MIMI KERNEL — MATHEMATICAL STATE ANALYSIS', 14, y);
     y += 6;
     doc.setTextColor(180, 180, 180);
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
     const formulas = [
-      `1. Hub Utilization:  ρ = N_late / N_total = ${rho.toFixed(4)}`,
-      `2. Sigmoidal Decay:  Φ(ρ) = 1 / (1 + exp(15*(ρ - ${(kState?.critical_rho ?? 0.85).toFixed(2)}))) = ${phi.toFixed(4)}`,
-      `3. Leakage Seed:     L = Σ $3.94  for each High-Importance failure = $${irp?.leakage_total?.toFixed(2) ?? '0.00'}`,
-      `4. Kalman Estimator: x̂_{k+1} = x̂_k + K(z_k - x̂_k)  K=${(kState?.kalman?.K ?? 0).toFixed(4)}`,
+      `1. Hub Utilization:      ρ = N_late / N_total = ${rho.toFixed(4)}`,
+      `2. Sigmoidal Priority Decay: Φ(ρ) = 1 / (1 + exp(-20(ρ - ${(kState?.critical_rho ?? 0.85).toFixed(2)}))) = ${phi.toFixed(4)}`,
+      `3. Priority Leakage:     L = $1.20 (recovery) + $2.74 (CLV) = $3.94 × ${irp?.failure_count ?? 0} = $${irp?.leakage_total?.toFixed(2) ?? '0.00'}`,
+      `4. Queue Wait (M/M/1):   Wq = ρ / (1-ρ) = ${(kState?.wq ?? 0).toFixed(4)}`,
+      `5. Kalman Estimator:     x̂_{k+1} = x̂_k + K(z_k - x̂_k)  K=${(kState?.kalman?.K ?? 0).toFixed(4)}`,
     ];
     formulas.forEach(f => { doc.text(f, 14, y); y += 6; });
 
