@@ -81,6 +81,7 @@ class MIMIKernel:
         fail_df = df[mask]
         n_fail = int(len(fail_df))
         n_high = int((df['Product_importance'].str.lower() == 'high').sum())
+        failure_rate = round(float(n_fail / n_high), 4) if n_high > 0 else 0.0
         top = fail_df.head(25)[[
             'ID', 'Warehouse_block', 'Mode_of_Shipment',
             'Cost_of_the_Product', 'Weight_in_gms', 'Discount_offered'
@@ -91,7 +92,10 @@ class MIMIKernel:
         return {
             "failure_count": n_fail,
             "total_high": n_high,
+            "failure_rate": failure_rate,
             "leakage_total": round(n_fail * self.LEAKAGE_SEED, 2),
+            "clv_loss": round(n_fail * 2.74, 2),
+            "recovery_value": round(n_fail * 1.20, 2),
             "records": records
         }
 
