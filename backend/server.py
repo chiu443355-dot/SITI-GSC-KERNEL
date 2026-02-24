@@ -179,6 +179,8 @@ class MIMIKernel:
         }
 
     def fit_lr(self) -> float:
+        df = self.df.copy()
+        for col in ['Mode_of_Shipment', 'Product_importance', 'Warehouse_block', 'Gender']:
             if col in df.columns:
                 df[f'{col}_enc'] = LabelEncoder().fit_transform(df[col].astype(str))
         features = [c for c in [
