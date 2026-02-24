@@ -158,7 +158,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
       doc.text(`SITI Intelligence · CONFIDENTIAL FORENSIC STATE AUDIT · Page ${i}/${pageCount}`, 105, 290, { align: 'center' });
     }
 
-    doc.save(`nodeguard-forensic-audit-${Date.now()}.pdf`);
+    doc.save(`siti-forensic-state-audit-${Date.now()}.pdf`);
   };
 
   return (
