@@ -145,7 +145,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(180, 220, 180);
-    doc.text('This audit has been processed by the NodeGuard GSC MIMI Kernel in accordance with', 105, y + 18, { align: 'center' });
+    doc.text('This audit has been processed by SITI Intelligence — MIMI Kernel, in accordance with', 105, y + 18, { align: 'center' });
     doc.text('Mission LiFE (Lifestyle for Environment) ESG compliance framework.', 105, y + 24, { align: 'center' });
     doc.text('Logistics optimization reduces carbon footprint: diverted units reduce wasted transport cycles.', 105, y + 30, { align: 'center' });
 
