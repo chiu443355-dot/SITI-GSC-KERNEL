@@ -127,9 +127,58 @@ class MIMIKernel:
             })
         return results
 
+    def average_delay_per_block(self) -> list:
+        """Average delay proxy per block: Customer_care_calls × mode_factor × 8h for late shipments"""
+        mode_map = {'Ship': 2.0, 'Flight': 0.5, 'Road': 1.0}
+        results = []
+        for b in ['A', 'B', 'C', 'D', 'F']:
+            sub = self.df[self.df['Warehouse_block'] == b]
+            late = sub[sub['Reached.on.Time_Y.N'] == 0].copy()
+            n = len(sub)
+            n_late = len(late)
+            if n == 0:
+                continue
+            if n_late > 0:
+                mf = late['Mode_of_Shipment'].map(mode_map).fillna(1.0)
+                avg_delay = float((late['Customer_care_calls'] * mf * 8.0).mean())
+            else:
+                avg_delay = 0.0
+            results.append({"block": b, "avg_delay": round(avg_delay, 1), "n_late": n_late, "n_total": int(n)})
+        return results
+
+    def red_zone_importance(self) -> list:
+        """Product importance breakdown for Red Zone (blocks with ρ > 0.80) late shipments"""
+        red_blocks = [
+            b for b in ['A', 'B', 'C', 'D', 'F']
+            if (sub := self.df[self.df['Warehouse_block'] == b]) is not None
+            and len(sub) > 0
+            and (sub['Reached.on.Time_Y.N'] == 0).sum() / len(sub) > 0.80
+        ]
+        if not red_blocks:
+            red_blocks = ['A', 'B', 'C', 'D', 'F']
+        red_df = self.df[
+            (self.df['Warehouse_block'].isin(red_blocks)) &
+            (self.df['Reached.on.Time_Y.N'] == 0)
+        ]
+        counts = red_df['Product_importance'].str.title().value_counts()
+        return [{"name": lvl, "value": int(counts.get(lvl, 0))} for lvl in ['High', 'Medium', 'Low']]
+
+    def routing_logic(self, rho_val: float) -> dict:
+        """Autonomous GSC routing: identify overloaded vs available hubs, ε=0.05 safety buffer"""
+        wh = self.warehouse_metrics()
+        epsilon = 0.05
+        threshold = self.critical_rho
+        overloaded = [{"block": w['block'], "utilization": w['utilization']} for w in wh if w['utilization'] > 0.85]
+        available = [{"block": w['block'], "utilization": w['utilization']} for w in wh if w['utilization'] < threshold - epsilon]
+        return {
+            "overloaded_blocks": overloaded,
+            "available_blocks": available,
+            "diversion_active": len(overloaded) > 0 and len(available) > 0,
+            "epsilon": epsilon,
+            "threshold": round(threshold, 4)
+        }
+
     def fit_lr(self) -> float:
-        df = self.df.copy()
-        for col in ['Mode_of_Shipment', 'Product_importance', 'Warehouse_block', 'Gender']:
             if col in df.columns:
                 df[f'{col}_enc'] = LabelEncoder().fit_transform(df[col].astype(str))
         features = [c for c in [
