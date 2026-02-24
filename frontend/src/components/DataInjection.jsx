@@ -182,7 +182,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
         <div style={{ fontSize: 9, color: '#555', marginBottom: 12, lineHeight: 1.6 }}>
           Upload a new shipment dataset (CSV). The MIMI Kernel will wipe historical weights,
           perform fresh logistic regression, and auto-recalculate ρ_critical threshold.
-          <span style={{ color: '#64D2FF' }}> GHOST MODE: Data is processed in volatile memory only.</span>
+          <span style={{ color: '#64D2FF' }}> GHOST MODE: SITI processes data in volatile memory only. Nothing is stored.</span>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
