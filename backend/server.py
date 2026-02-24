@@ -46,8 +46,17 @@ class MIMIKernel:
         late = int((self.df['Reached.on.Time_Y.N'] == 0).sum())
         return round(float(late / self.n_total), 4)
 
+    K_DECAY = 20  # Sigmoidal decay gradient
+
     def phi(self, rho_val: float) -> float:
-        return round(float(1 / (1 + np.exp(15 * (rho_val - self.critical_rho)))), 4)
+        """Sigmoidal Priority Decay: Φ(ρ) = 1/(1 + e^{-k(ρ - ρ_c)})  k=20, ρ_c=critical"""
+        return round(float(1 / (1 + np.exp(-self.K_DECAY * (rho_val - self.critical_rho)))), 4)
+
+    def wq(self, rho_val: float) -> float:
+        """M/M/1 Queue Wait: Wq = ρ / (μ(1-ρ)), μ=1 normalized"""
+        if rho_val >= 1.0:
+            return 99.9999
+        return round(float(rho_val / (1 - rho_val)), 4)
 
     def kalman_step(self, z: float) -> dict:
         Q, R = 0.002, 0.005
