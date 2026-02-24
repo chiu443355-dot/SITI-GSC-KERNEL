@@ -155,7 +155,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
       doc.setPage(i);
       doc.setFontSize(7);
       doc.setTextColor(80, 80, 80);
-      doc.text(`NodeGuard GSC · CONFIDENTIAL FORENSIC AUDIT · Page ${i}/${pageCount}`, 105, 290, { align: 'center' });
+      doc.text(`SITI Intelligence · CONFIDENTIAL FORENSIC STATE AUDIT · Page ${i}/${pageCount}`, 105, 290, { align: 'center' });
     }
 
     doc.save(`nodeguard-forensic-audit-${Date.now()}.pdf`);
