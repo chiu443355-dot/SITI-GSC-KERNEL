@@ -235,7 +235,7 @@ _session: dict = {
 
 @api_router.get("/")
 async def root():
-    return {"message": "NodeGuard GSC API — MIMI Kernel Online"}
+    return {"message": "SITI Intelligence — MIMI Kernel Active"}
 
 
 @api_router.get("/kernel/state")
