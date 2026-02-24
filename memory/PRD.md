@@ -26,7 +26,25 @@ Build "NodeGuard GSC," a SaaS Web Dashboard for predictive logistics recovery. U
 9. Dark mode (Bloomberg Terminal aesthetic)
 10. LaTeX formula display via KaTeX
 
-## What's Been Implemented (Feb 24, 2026)
+## What's Been Implemented (Feb 24, 2026) — v2.0 Update
+
+### Backend Enhancements
+- **Φ(ρ) Formula Updated**: k=20, Φ(ρ) = 1/(1 + e^{-20(ρ - ρ_c)}) — now represents INSTABILITY (higher = worse)
+- **W_q (M/M/1 Queue Wait)**: W_q = ρ/(1-ρ), μ=1 normalized
+- **average_delay_per_block()**: Customer_care_calls × mode_factor × 8h for late shipments per block
+- **red_zone_importance()**: Product importance breakdown (High/Medium/Low) for Red Zone (ρ>0.80) shipments
+- **routing_logic()**: Autonomous GSC routing — identifies overloaded (>0.85) vs available (<ρ_c-ε) blocks
+- **Two catastrophe levels**: catastrophe (ρ>0.80) + collapse (ρ≥0.85)
+- **Failure rate & CLV**: $1.20 recovery + $2.74 CLV = $3.94 leakage seed per unit
+
+### Frontend Updates
+- **HubCharts**: Replaced old utilization bar + mode pie with:
+  - NEW: "Average Delay per Warehouse Block" bar chart (hours, color-coded)
+  - NEW: "Red Zone Product Importance" pie chart (High=red, Medium=amber, Low=green)
+  - Reference lines at 0.80 and 0.85 on ρ trajectory chart
+- **MIMIPanel**: 6 formulas — updated Φ(ρ) with k=20 formula, new W_q formula, updated leakage ($1.20+$2.74=$3.94)
+- **Dashboard**: Two-level alert banners, Instability Index KPI, W_q KPI, failure rate KPI
+- **RoutingWidget**: GSC autonomous routing logic panel (overloaded/available blocks + ε buffer)
 
 ### Backend (server.py)
 - MIMIKernel class with base_rho(), phi(), kalman_step(), inverse_reliability(), warehouse_metrics(), mode_metrics(), fit_lr()
