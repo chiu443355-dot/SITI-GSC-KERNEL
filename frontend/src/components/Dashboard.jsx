@@ -232,7 +232,7 @@ function RoutingWidget({ kState }) {
       style={{ background: '#0A0A0A', border: `1px solid ${active ? '#FF9F0A' : '#1F1F1F'}`, padding: '10px 12px' }}
     >
       <div style={{ fontSize: 9, color: '#A1A1AA', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
-        <span>GSC ROUTING LOGIC</span>
+        <span>SITI ROUTING LOGIC</span>
         <span style={{ color: active ? '#FF9F0A' : '#555', fontSize: 9 }}>
           {active ? 'DIVERT ACTIVE' : 'STANDBY'}
         </span>
