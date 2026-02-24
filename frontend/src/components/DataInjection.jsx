@@ -48,18 +48,18 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(255, 179, 64);
     doc.setFontSize(18);
-    doc.text('NODEGUARD GSC', 12, 14);
+    doc.text('SITI INTELLIGENCE', 12, 14);
 
     doc.setFontSize(9);
     doc.setTextColor(200, 200, 200);
-    doc.text('FORENSIC AUDIT REPORT — SAFEXPRESS CASE #02028317', 12, 22);
+    doc.text('FORENSIC STATE AUDIT [Case #02028317]', 12, 22);
     doc.text(`GENERATED: ${now}`, 12, 30);
     doc.text(`DATASET: ${kState?.dataset_name ?? 'SAFEXPRESS_CASE_02028317'}`, 12, 37);
 
     doc.setTextColor(255, 59, 48);
     doc.setFontSize(9);
     doc.setFont('helvetica', 'bold');
-    doc.text(rho > 0.80 ? 'STATUS: CATASTROPHE — PREEMPTIVE DIVERSION PROTOCOL INITIATED' : 'STATUS: NOMINAL OPERATIONS', 12, 43);
+    doc.text(rho > 0.85 ? 'STATUS: UTILIZATION COLLAPSE — SIGMOIDAL DECAY TRIGGERED' : rho > 0.80 ? 'STATUS: PREEMPTIVE DIVERSION PROTOCOL INITIATED' : 'STATUS: NOMINAL OPERATIONS', 12, 43);
 
     // ── Executive Summary ─────────────────────────────────────
     doc.setTextColor(255, 179, 64);
