@@ -14,10 +14,25 @@ export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh 
     return (
       <div style={{ background: '#050505', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ color: '#FFB340', fontFamily: 'JetBrains Mono', fontSize: 14, letterSpacing: '0.2em' }}>
+          {/* Mini SITI sigmoid in loading screen */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+            <svg width="40" height="40" viewBox="0 0 34 34" fill="none">
+              <path d="M 24 7 C 30 7, 30 15, 17 17 C 4 19, 4 27, 10 27" stroke="#FFB340" strokeWidth="2.2" strokeLinecap="round" fill="none" />
+              <circle cx="24" cy="7" r="2.4" fill="#FFB340" />
+              <circle cx="10" cy="27" r="2.4" fill="#FFB340" opacity="0.7" />
+              <circle cx="17" cy="17" r="1.2" fill="#FFB34055" />
+            </svg>
+          </div>
+          <div style={{ color: '#FFB340', fontFamily: 'Chivo, sans-serif', fontWeight: 900, fontSize: 16, letterSpacing: '0.2em' }}>
+            SITI INTELLIGENCE
+          </div>
+          <div style={{ color: '#555', fontFamily: 'JetBrains Mono', fontSize: 10, letterSpacing: '0.18em', marginTop: 4 }}>
+            LOGIC FOR THE PARADOX // POWERED BY MIMI
+          </div>
+          <div style={{ color: '#A1A1AA', fontFamily: 'JetBrains Mono', fontSize: 11, marginTop: 16, letterSpacing: '0.12em' }}>
             INITIALIZING MIMI KERNEL...
           </div>
-          <div style={{ color: '#A1A1AA', fontFamily: 'JetBrains Mono', fontSize: 11, marginTop: 8, letterSpacing: '0.1em' }}>
+          <div style={{ color: '#3A3A3A', fontFamily: 'JetBrains Mono', fontSize: 9, marginTop: 6, letterSpacing: '0.1em' }}>
             SAFEXPRESS CASE #02028317 · LOADING DATASET
           </div>
         </div>
