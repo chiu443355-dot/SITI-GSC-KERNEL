@@ -1,52 +1,45 @@
-import { useEffect } from "react";
-import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import React, { useState, useEffect, useCallback } from "react";
 import axios from "axios";
+import Dashboard from "./components/Dashboard";
+import "./App.css";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 function App() {
+  const [kState, setKState] = useState(null);
+  const [ticker, setTicker] = useState({ total_diverted: 0, revenue_saved: 0, refresh_count: 0 });
+  const [loading, setLoading] = useState(true);
+
+  const fetchState = useCallback(async () => {
+    try {
+      const [stateRes, tickRes] = await Promise.all([
+        axios.get(`${API}/kernel/state`),
+        axios.post(`${API}/kernel/tick`)
+      ]);
+      setKState(stateRes.data);
+      setTicker(tickRes.data);
+      setLoading(false);
+    } catch (e) {
+      console.error("MIMI Kernel fetch error:", e);
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchState();
+    const interval = setInterval(fetchState, 4000);
+    return () => clearInterval(interval);
+  }, [fetchState]);
+
   return (
     <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+      <Dashboard
+        kState={kState}
+        ticker={ticker}
+        loading={loading}
+        apiBase={API}
+        onRefresh={fetchState}
+      />
     </div>
   );
 }
