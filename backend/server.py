@@ -335,10 +335,14 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def init_kernel():
+    import asyncio
     df = _generate_dataset()
     _session["mimi"] = MIMIKernel(df)
-    _session["mimi"].fit_lr()
-    logger.info(f"MIMI Kernel initialized: n={len(df)}, ρ={_session['mimi'].base_rho():.4f}, ρ_c={_session['mimi'].critical_rho:.4f}")
+    logger.info(f"MIMI Kernel initialized: n={len(df)}, ρ={_session['mimi'].base_rho():.4f}")
+    # Fit LR in background (non-blocking)
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _session["mimi"].fit_lr)
+    logger.info(f"LR fitted: ρ_c={_session['mimi'].critical_rho:.4f}")
 
 
 @app.on_event("shutdown")
