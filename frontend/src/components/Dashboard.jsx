@@ -30,7 +30,7 @@ export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh 
       data-testid="main-dashboard"
       className={catastrophe ? 'catastrophe-mode' : ''}
       style={{
-        background: catastrophe ? '#0D0000' : '#050505',
+        background: collapse ? '#140000' : catastrophe ? '#0D0000' : '#050505',
         minHeight: '100vh',
         transition: 'background 0.5s ease',
         fontFamily: 'JetBrains Mono, monospace',
