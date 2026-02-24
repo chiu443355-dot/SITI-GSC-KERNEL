@@ -53,7 +53,18 @@ html, body, #root {
   50% { text-shadow: 0 0 12px #FFB340cc, 0 0 20px #FFB34066; }
 }
 
-/* ── Utility Classes ───────────────────────────────────────── */
+/* ── Calibrating Overlay Animation ───────────────────────── */
+@keyframes sweep-bar {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(420%); }
+}
+
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+
 .blink-critical { animation: blink-critical 1s ease-in-out infinite; }
 .pulse-border-red { animation: pulse-border 1.5s ease-in-out infinite; }
 .counter-tick { animation: counter-tick 0.3s ease-out; }
