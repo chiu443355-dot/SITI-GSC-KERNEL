@@ -176,18 +176,19 @@ function RecoveryWidget({ ticker, kState }) {
 function KalmanWidget({ kState }) {
   const k = kState?.kalman;
   const isCritical = kState?.catastrophe_predicted;
+  const isCollapse = kState?.collapse_predicted;
   return (
     <div
       data-testid="kalman-widget"
-      style={{ background: '#0A0A0A', border: `1px solid ${isCritical ? '#FF3B30' : '#1F1F1F'}`, padding: '12px' }}
+      style={{ background: '#0A0A0A', border: `1px solid ${isCollapse ? '#FF3B30' : isCritical ? '#FF9F0A' : '#1F1F1F'}`, padding: '12px' }}
     >
       <div style={{ color: '#A1A1AA', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>
-        KALMAN STATE ESTIMATOR // T+1
+        KALMAN STATE ESTIMATOR // 45-MIN T+1
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
         {[
           { label: 'x̂_k', value: k?.x_hat?.toFixed(4), color: '#64D2FF' },
-          { label: 'T+1', value: k?.rho_t1?.toFixed(4), color: isCritical ? '#FF3B30' : '#32D74B' },
+          { label: 'T+1', value: k?.rho_t1?.toFixed(4), color: isCollapse ? '#FF3B30' : isCritical ? '#FF9F0A' : '#32D74B' },
           { label: 'K', value: k?.K?.toFixed(4), color: '#FFB340' },
           { label: 'P', value: k?.P?.toExponential(2), color: '#A1A1AA' },
         ].map(({ label, value, color }) => (
@@ -198,7 +199,58 @@ function KalmanWidget({ kState }) {
         ))}
       </div>
       <div style={{ marginTop: 8, color: '#555', fontSize: 9, letterSpacing: '0.08em' }}>
-        Q=0.002 · R=0.005 · F=I · H=I
+        Q=0.002 · R=0.005 · F=I · H=I · T+1≡45min
+      </div>
+    </div>
+  );
+}
+
+function RoutingWidget({ kState }) {
+  const routing = kState?.routing;
+  const overloaded = routing?.overloaded_blocks ?? [];
+  const available = routing?.available_blocks ?? [];
+  const active = routing?.diversion_active;
+
+  return (
+    <div
+      data-testid="routing-widget"
+      style={{ background: '#0A0A0A', border: `1px solid ${active ? '#FF9F0A' : '#1F1F1F'}`, padding: '10px 12px' }}
+    >
+      <div style={{ fontSize: 9, color: '#A1A1AA', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
+        <span>GSC ROUTING LOGIC</span>
+        <span style={{ color: active ? '#FF9F0A' : '#555', fontSize: 9 }}>
+          {active ? 'DIVERT ACTIVE' : 'STANDBY'}
+        </span>
+      </div>
+      <div style={{ fontSize: 8, color: '#555', marginBottom: 8, lineHeight: 1.7, letterSpacing: '0.07em' }}>
+        If ρ_HubA &gt; 0.85 ∧ ρ_HubB &lt; ρ_c − ε → Divert(Vp)
+        <br />ε = {routing?.epsilon ?? '0.05'} · ρ_threshold = {routing?.threshold ?? '—'}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+        <div style={{ background: '#110500', border: '1px solid #3A1400', padding: '6px 8px' }}>
+          <div style={{ fontSize: 8, color: '#FF3B30', letterSpacing: '0.1em', marginBottom: 4 }}>OVERLOADED &gt;0.85</div>
+          {overloaded.length > 0
+            ? overloaded.map(w => (
+              <div key={w.block} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#FF9F0A' }}>
+                <span>HUB {w.block}</span>
+                <span>{(w.utilization * 100).toFixed(1)}%</span>
+              </div>
+            ))
+            : <div style={{ color: '#555', fontSize: 9 }}>NONE</div>
+          }
+        </div>
+        <div style={{ background: '#001500', border: '1px solid #003A00', padding: '6px 8px' }}>
+          <div style={{ fontSize: 8, color: '#32D74B', letterSpacing: '0.1em', marginBottom: 4 }}>AVAILABLE &lt;ρ_c-ε</div>
+          {available.length > 0
+            ? available.map(w => (
+              <div key={w.block} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#32D74B' }}>
+                <span>HUB {w.block}</span>
+                <span>{(w.utilization * 100).toFixed(1)}%</span>
+              </div>
+            ))
+            : <div style={{ color: '#555', fontSize: 9 }}>NONE</div>
+          }
+        </div>
       </div>
     </div>
   );
