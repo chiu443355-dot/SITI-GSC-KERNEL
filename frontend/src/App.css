@@ -1,34 +1,111 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+/* NodeGuard GSC — Bloomberg Terminal Aesthetic */
+@import url('https://fonts.googleapis.com/css2?family=Chivo:wght@700;900&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap');
+
+/* ── Global Reset ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  background: #050505;
+  color: #ffffff;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+/* ── KaTeX Dark Mode Override ─────────────────────────────── */
+.katex { color: #FFB340 !important; font-size: 1em !important; }
+.katex .mord, .katex .mbin, .katex .mrel, .katex .mopen,
+.katex .mclose, .katex .mpunct, .katex .minner { color: inherit !important; }
+.katex-display { color: #FFB340 !important; margin: 0.5em 0 !important; }
+
+/* ── Animations ────────────────────────────────────────────── */
+@keyframes blink-critical {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+@keyframes pulse-border {
+  0%, 100% { border-color: #FF3B30; box-shadow: 0 0 8px #FF3B30aa; }
+  50% { border-color: #ff6b6b; box-shadow: 0 0 20px #FF3B30; }
 }
 
-.App-link {
-    color: #61dafb;
+@keyframes counter-tick {
+  0% { transform: translateY(0); }
+  25% { transform: translateY(-2px); }
+  75% { transform: translateY(2px); }
+  100% { transform: translateY(0); }
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+@keyframes scan-line {
+  0% { top: 0; }
+  100% { top: 100%; }
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glow-amber {
+  0%, 100% { text-shadow: 0 0 4px #FFB34088; }
+  50% { text-shadow: 0 0 12px #FFB340cc, 0 0 20px #FFB34066; }
+}
+
+/* ── Utility Classes ───────────────────────────────────────── */
+.blink-critical { animation: blink-critical 1s ease-in-out infinite; }
+.pulse-border-red { animation: pulse-border 1.5s ease-in-out infinite; }
+.counter-tick { animation: counter-tick 0.3s ease-out; }
+.fade-in-up { animation: fade-in-up 0.4s ease-out forwards; }
+.glow-amber { animation: glow-amber 2s ease-in-out infinite; }
+
+/* ── Catastrophe Mode ─────────────────────────────────────── */
+.catastrophe-mode { background: #0D0000 !important; }
+.catastrophe-mode .ng-card { border-color: #FF3B30 !important; }
+
+/* ── Scrollbar ─────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #0A0A0A; }
+::-webkit-scrollbar-thumb { background: #2A2A2A; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #FFB340; }
+
+/* ── Table ────────────────────────────────────────────────── */
+.ng-table th {
+  background: #0F0F0F;
+  color: #A1A1AA;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-bottom: 1px solid #1F1F1F;
+  padding: 6px 10px;
+}
+.ng-table td {
+  font-size: 11px;
+  color: #E0E0E0;
+  border-bottom: 1px solid #141414;
+  padding: 5px 10px;
+}
+.ng-table tr:hover td { background: #111111; }
+
+/* ── Status Dot ───────────────────────────────────────────── */
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-dot.green { background: #32D74B; box-shadow: 0 0 6px #32D74B; }
+.status-dot.red { background: #FF3B30; box-shadow: 0 0 6px #FF3B30; animation: blink-critical 1s infinite; }
+.status-dot.amber { background: #FFB340; box-shadow: 0 0 6px #FFB340; }
+
+/* ── Scan Line Effect ─────────────────────────────────────── */
+.scan-container { position: relative; overflow: hidden; }
+.scan-container::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(to right, transparent, #FFB34022, #FFB34044, #FFB34022, transparent);
+  animation: scan-line 4s linear infinite;
+  pointer-events: none;
 }
