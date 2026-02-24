@@ -152,25 +152,25 @@ export default function MIMIPanel({ kState, catastrophe }) {
       <div style={{ padding: '10px 14px', borderTop: '1px solid #141414', background: '#070707' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 9, color: '#555', letterSpacing: '0.1em' }}>
           <span>ρ = 0.00</span>
-          <span style={{ color: '#FF9F0A' }}>WARNING 0.75</span>
-          <span style={{ color: '#FF3B30' }}>CRITICAL 0.80</span>
+          <span style={{ color: '#FF9F0A' }}>DIVERSION 0.80</span>
+          <span style={{ color: '#FF3B30' }}>COLLAPSE 0.85</span>
           <span>ρ = 1.00</span>
         </div>
         <div style={{ height: 6, background: '#161616', borderRadius: 1, overflow: 'hidden', position: 'relative' }}>
           <div style={{
             position: 'absolute', left: 0, top: 0, bottom: 0,
             width: `${rho * 100}%`,
-            background: catastrophe ? '#FF3B30' : rho > 0.75 ? '#FF9F0A' : '#FFB340',
+            background: collapse ? '#FF3B30' : rho > 0.80 ? '#FF9F0A' : '#FFB340',
             transition: 'width 0.5s, background 0.3s',
           }} />
-          {/* Warning marker at 0.75 */}
-          <div style={{ position: 'absolute', left: '75%', top: 0, bottom: 0, width: 1, background: '#FF9F0A' }} />
-          {/* Critical marker at 0.80 */}
-          <div style={{ position: 'absolute', left: '80%', top: 0, bottom: 0, width: 1, background: '#FF3B30' }} />
+          <div style={{ position: 'absolute', left: '80%', top: 0, bottom: 0, width: 1, background: '#FF9F0A' }} />
+          <div style={{ position: 'absolute', left: '85%', top: 0, bottom: 0, width: 1, background: '#FF3B30' }} />
         </div>
         <div style={{ fontSize: 9, color: '#555', marginTop: 4, textAlign: 'center', letterSpacing: '0.1em' }}>
-          CURRENT ρ = <span style={{ color: catastrophe ? '#FF3B30' : '#FFB340', fontWeight: 700 }}>{rho.toFixed(4)}</span>
-          {' '}· CRITICAL ρ_c = <span style={{ color: '#FF9F0A' }}>{critRho.toFixed(4)}</span>
+          ρ = <span style={{ color: collapse ? '#FF3B30' : catastrophe ? '#FF9F0A' : '#FFB340', fontWeight: 700 }}>{rho.toFixed(4)}</span>
+          {' '}· ρ_c = <span style={{ color: '#FF9F0A' }}>{critRho.toFixed(4)}</span>
+          {' '}· Φ(ρ_c) = <span style={{ color: '#64D2FF' }}>0.5000</span>
+          {' '}· ε=0.05
         </div>
       </div>
     </div>
