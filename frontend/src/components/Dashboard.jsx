@@ -39,30 +39,40 @@ export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh 
       {/* Executive HUD */}
       <ExecutiveHUD kState={kState} ticker={ticker} catastrophe={catastrophe} />
 
-      {/* Catastrophe Banner */}
-      {catastrophe && (
+      {/* Collapse Banner — ρ ≥ 0.85 */}
+      {collapse && (
         <div
-          data-testid="catastrophe-banner"
+          data-testid="collapse-banner"
           className="pulse-border-red"
-          style={{
-            background: '#1A0000',
-            border: '2px solid #FF3B30',
-            padding: '12px 24px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            margin: '0 16px',
-          }}
+          style={{ background: '#200000', border: '2px solid #FF3B30', padding: '14px 24px', display: 'flex', alignItems: 'center', gap: 12, margin: '0 16px 4px' }}
         >
           <span className="status-dot red" />
           <span
             className="blink-critical"
-            style={{ color: '#FF3B30', fontFamily: 'Chivo, sans-serif', fontWeight: 900, fontSize: 14, letterSpacing: '0.15em' }}
+            style={{ color: '#FF3B30', fontFamily: 'Chivo, sans-serif', fontWeight: 900, fontSize: 15, letterSpacing: '0.2em' }}
+          >
+            UTILIZATION COLLAPSE: SIGMOIDAL DECAY TRIGGERED
+          </span>
+          <span style={{ color: '#FF8888', fontSize: 10, marginLeft: 'auto' }}>Φ={kState?.phi?.toFixed(4)} &gt; 0.50 TIPPING POINT</span>
+        </div>
+      )}
+
+      {/* Diversion Banner — ρ > 0.80, below 0.85 */}
+      {catastrophe && !collapse && (
+        <div
+          data-testid="catastrophe-banner"
+          className="pulse-border-red"
+          style={{ background: '#1A0000', border: '1px solid #FF9F0A', padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12, margin: '0 16px' }}
+        >
+          <span className="status-dot amber" />
+          <span
+            className="blink-critical"
+            style={{ color: '#FF9F0A', fontFamily: 'Chivo, sans-serif', fontWeight: 900, fontSize: 13, letterSpacing: '0.15em' }}
           >
             PREEMPTIVE DIVERSION PROTOCOL INITIATED
           </span>
-          <span style={{ color: '#FF8888', fontFamily: 'JetBrains Mono', fontSize: 11, marginLeft: 'auto' }}>
-            ρ = {kState?.rho?.toFixed(4)} &gt; 0.80 · T+1 PREDICTED: {kState?.kalman?.rho_t1?.toFixed(4)}
+          <span style={{ color: '#AA7700', fontSize: 10, marginLeft: 'auto' }}>
+            ρ={kState?.rho?.toFixed(4)} · T+1={kState?.kalman?.rho_t1?.toFixed(4)} · E[ρ(T+1)]&gt;0.80
           </span>
         </div>
       )}
