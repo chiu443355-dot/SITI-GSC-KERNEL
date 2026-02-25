@@ -126,6 +126,7 @@ export default function HubCharts({ kState }) {
               stroke="none"
               labelLine={false}
               label={<PieLabel />}
+              isAnimationActive={false}
             >
               {importanceData.map((d, i) => (
                 <Cell key={i} fill={IMPORTANCE_COLORS[d.name] ?? IMPORTANCE_COLOR_LIST[i]} />
@@ -137,8 +138,9 @@ export default function HubCharts({ kState }) {
             />
             <Legend
               layout="vertical" align="right" verticalAlign="middle" iconType="circle" iconSize={7}
+              wrapperStyle={{ color: '#FFFFFF', fontFamily: 'JetBrains Mono', fontSize: 9 }}
               formatter={(v) => (
-                <span style={{ color: IMPORTANCE_COLORS[v] ?? '#A1A1AA', fontSize: 9, fontFamily: 'JetBrains Mono' }}>
+                <span style={{ color: IMPORTANCE_COLORS[v] ?? '#FFFFFF', fontSize: 9, fontFamily: 'JetBrains Mono' }}>
                   {v}
                 </span>
               )}

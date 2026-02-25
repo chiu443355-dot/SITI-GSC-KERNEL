@@ -1,10 +1,15 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import axios from "axios";
+// Static imports — avoids async chunk-splitting issues in some build environments.
+// CDN fallback is provided in index.html for environments where the bundle chunk fails.
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 
 export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState(null);
   const [uploadError, setUploadError] = useState(null);
+  const [showOverlay, setShowOverlay] = useState(false);
   const fileRef = useRef(null);
 
   const handleUpload = async (e) => {
@@ -13,6 +18,9 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
     setUploading(true);
     setUploadMsg(null);
     setUploadError(null);
+    // Trigger the "Genius Reset" overlay immediately on file selection
+    setShowOverlay(true);
+    setTimeout(() => setShowOverlay(false), 2500);
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -30,10 +38,14 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
   };
 
   const exportPDF = async () => {
-    const { jsPDF } = await import('jspdf');
-    const { default: autoTable } = await import('jspdf-autotable');
+    // jsPDF and autoTable are statically imported above.
+    // If for any reason the module bundle fails to load them,
+    // the CDN fallback in index.html will have loaded window.jspdf.
+    const PDFClass = (typeof jsPDF !== 'undefined') ? jsPDF : window?.jspdf?.jsPDF;
+    const tablePlugin = (typeof autoTable !== 'undefined') ? autoTable : window?.jspdf?.autoTable;
+    if (!PDFClass) { alert('PDF engine not loaded. Please refresh the page.'); return; }
 
-    const doc = new jsPDF({ orientation: 'portrait', format: 'a4' });
+    const doc = new PDFClass({ orientation: 'portrait', format: 'a4' });
     const now = new Date().toISOString();
     const rho = kState?.rho ?? 0;
     const phi = kState?.phi ?? 0;
@@ -68,7 +80,6 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
     doc.text('EXECUTIVE SUMMARY', 14, 58);
 
     autoTable(doc, {
-      startY: 62,
       head: [['METRIC', 'VALUE', 'STATUS']],
       body: [
         ['Hub Utilization (ρ)', rho.toFixed(4), rho > 0.80 ? 'CRITICAL' : rho > 0.75 ? 'WARNING' : 'NOMINAL'],
@@ -92,7 +103,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
     doc.setTextColor(255, 179, 64);
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
-    doc.text('MIMI KERNEL — MATHEMATICAL STATE ANALYSIS', 14, y);
+    doc.text('MIMI INTELLIGENCE ENGINE — MATHEMATICAL STATE ANALYSIS', 14, y);
     y += 6;
     doc.setTextColor(180, 180, 180);
     doc.setFontSize(8);
@@ -145,7 +156,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(180, 220, 180);
-    doc.text('This audit has been processed by SITI Intelligence — MIMI Kernel, in accordance with', 105, y + 18, { align: 'center' });
+    doc.text('This audit has been processed by SITI Intelligence — MIMI Intelligence Engine, in accordance with', 105, y + 18, { align: 'center' });
     doc.text('Mission LiFE (Lifestyle for Environment) ESG compliance framework.', 105, y + 24, { align: 'center' });
     doc.text('Logistics optimization reduces carbon footprint: diverted units reduce wasted transport cycles.', 105, y + 30, { align: 'center' });
 
@@ -162,6 +173,43 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
   };
 
   return (
+    <>
+      {/* ── GENIUS RESET OVERLAY ── */}
+      {showOverlay && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9999,
+            background: 'rgba(255, 179, 64, 0.93)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center',
+            animation: 'siti-pulse 0.6s ease-in-out infinite alternate',
+          }}
+        >
+          <style>{`
+            @keyframes siti-pulse {
+              from { background: rgba(255,179,64,0.88); }
+              to   { background: rgba(255,140,0,0.97); }
+            }
+          `}</style>
+          <div style={{
+            fontFamily: 'JetBrains Mono', fontWeight: 700,
+            fontSize: 'clamp(14px, 2.5vw, 22px)',
+            color: '#0A0A0A', textAlign: 'center',
+            letterSpacing: '0.18em', lineHeight: 1.7,
+            padding: '0 24px',
+          }}>
+            SITI SYSTEM RE-CALIBRATING...
+            <br />
+            ANALYZING SIGMOIDAL DECAY AT ρ=0.85
+          </div>
+          <div style={{
+            marginTop: 18, fontFamily: 'JetBrains Mono', fontSize: 10,
+            color: '#1A0A00', letterSpacing: '0.22em', opacity: 0.7,
+          }}>
+            MIMI INTELLIGENCE ENGINE · FORENSIC KERNEL ACTIVE
+          </div>
+        </div>
+      )}
     <div
       data-testid="data-injection-module"
       style={{
@@ -180,7 +228,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
           DATA INJECTION MODULE — GENIUS RESET
         </div>
         <div style={{ fontSize: 9, color: '#555', marginBottom: 12, lineHeight: 1.6 }}>
-          Upload a new shipment dataset (CSV). The MIMI Kernel will wipe historical weights,
+          Upload a new shipment dataset (CSV). The MIMI Intelligence Engine will wipe historical weights,
           perform fresh logistic regression, and auto-recalculate ρ_critical threshold.
           <span style={{ color: '#64D2FF' }}> GHOST MODE: SITI processes data in volatile memory only. Nothing is stored.</span>
         </div>
@@ -244,7 +292,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
           EXPORT FORENSIC STATE AUDIT REPORT
         </div>
         <div style={{ fontSize: 9, color: '#555', marginBottom: 12, lineHeight: 1.6 }}>
-          Generate a board-ready PDF: <em>SITI: Forensic State Audit [Case #02028317]</em> with full MIMI Kernel analysis,
+          Generate a board-ready PDF: <em>SITI: Forensic State Audit [Case #02028317]</em> with full MIMI Intelligence Engine analysis,
           Inverse Reliability findings, and <span style={{ color: '#32D74B' }}>Mission LiFE ESG Compliance Certification</span>.
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -275,7 +323,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
         {/* Report Preview */}
         <div style={{ marginTop: 10, padding: '8px', background: '#060606', border: '1px solid #141414', fontSize: 8, color: '#555', lineHeight: 1.8 }}>
           <div style={{ color: '#A1A1AA', marginBottom: 4, letterSpacing: '0.1em' }}>REPORT INCLUDES:</div>
-          {['Executive KPI Summary', 'MIMI Kernel Math Formulation', 'Warehouse Utilization Breakdown',
+          {['Executive KPI Summary', 'MIMI Intelligence Engine Math Formulation', 'Warehouse Utilization Breakdown',
             'Inverse Reliability Paradox Table (Top 15)', 'Kalman Filter State Analysis', 'Mission LiFE ESG Compliance Tag'].map(item => (
             <div key={item} style={{ display: 'flex', gap: 6 }}>
               <span style={{ color: '#32D74B' }}>✓</span>
@@ -285,5 +333,6 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
         </div>
       </div>
     </div>
+    </>
   );
 }
