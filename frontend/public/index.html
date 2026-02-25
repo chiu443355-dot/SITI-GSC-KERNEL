@@ -24,6 +24,28 @@
         -->
         <title>Emergent | Fullstack App</title>
         <script>window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);</script>
+        <!-- jsPDF CDN fallback: loaded only if the main bundle chunk fails to resolve jsPDF -->
+        <script>
+          (function() {
+            // Attempt to detect if jsPDF is already bundled. If not, load from CDN.
+            window.__jspdfFallbackLoader = function() {
+              if (typeof window.jspdf === 'undefined') {
+                var s1 = document.createElement('script');
+                s1.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+                s1.onload = function() {
+                  var s2 = document.createElement('script');
+                  s2.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js';
+                  document.head.appendChild(s2);
+                };
+                document.head.appendChild(s1);
+              }
+            };
+            // Fire after main bundle has had a chance to load
+            window.addEventListener('load', function() {
+              setTimeout(window.__jspdfFallbackLoader, 1500);
+            });
+          })();
+        </script>
         <script src="https://assets.emergent.sh/scripts/emergent-main.js"></script>
         <!--
         These two scripts have been added for the Visual Edits, please do not edit or remove them
