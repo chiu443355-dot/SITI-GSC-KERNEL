@@ -32,7 +32,8 @@ export default function ExecutiveHUD({ kState, ticker, catastrophe }) {
   const tickerItems = [
     { label: 'ρ', value: kState?.rho?.toFixed(4) ?? '---', color: catastrophe ? '#FF3B30' : '#FFB340' },
     { label: 'Φ(ρ)', value: kState?.phi?.toFixed(4) ?? '---', color: '#64D2FF' },
-    { label: 'T+1', value: kState?.kalman?.rho_t1?.toFixed(4) ?? '---', color: kState?.catastrophe_predicted ? '#FF3B30' : '#32D74B' },
+    { label: 'T+1', value: kState?.kalman?.rho_t1?.toFixed(4) ?? '---', color: '#32D74B' },
+    { label: 'T+3', value: kState?.kalman?.rho_t3?.toFixed(4) ?? '---', color: kState?.catastrophe_predicted ? '#FF3B30' : '#32D74B' },
     { label: 'W_q', value: kState?.wq?.toFixed(3) ?? '---', color: '#64D2FF' },
     { label: 'FAILURES', value: kState?.inverse_reliability?.failure_count?.toLocaleString() ?? '---', color: '#FF9F0A' },
     { label: 'LEAKAGE', value: `$${kState?.inverse_reliability?.leakage_total?.toLocaleString('en-US', { minimumFractionDigits: 2 }) ?? '0.00'}`, color: '#FF3B30' },

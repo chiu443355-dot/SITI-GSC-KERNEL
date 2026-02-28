@@ -85,7 +85,7 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
         ['Hub Utilization (ρ)', rho.toFixed(4), rho > 0.80 ? 'CRITICAL' : rho > 0.75 ? 'WARNING' : 'NOMINAL'],
         ['Logic Health Φ(ρ)', phi.toFixed(4), phi < 0.2 ? 'CRITICAL' : phi < 0.5 ? 'DEGRADED' : 'HEALTHY'],
         ['Critical Threshold ρ_c', (kState?.critical_rho ?? 0.85).toFixed(4), 'COMPUTED'],
-        ['Kalman T+1 Prediction', (kState?.kalman?.rho_t1 ?? 0).toFixed(4), kState?.catastrophe_predicted ? 'ALERT' : 'NOMINAL'],
+        ['Kalman T+3 Prediction', (kState?.kalman?.rho_t3 ?? 0).toFixed(4), kState?.catastrophe_predicted ? 'ALERT' : 'NOMINAL'],
         ['Total Annualized Exposure', '$2,810,000', 'FIXED AUDIT BASELINE'],
         ['Revenue Saved', `$${(ticker?.revenue_saved ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`, 'RECOVERED'],
         ['Diverted Units', (ticker?.total_diverted ?? 0).toLocaleString(), 'DIVERTED'],
