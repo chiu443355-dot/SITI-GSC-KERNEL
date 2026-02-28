@@ -29,7 +29,7 @@ function PerformanceFeeCalculator({ totalDiverted, leakageSeed }) {
   return (
     <div style={{ textAlign: 'right', borderLeft: '1px solid #1A1A1A', paddingLeft: 20 }}>
       <div style={{ fontSize: 8, color: '#64D2FF', letterSpacing: '0.12em', fontWeight: 700 }}>
-        REAL-TIME EQUITY RECOVERY (10% OPTIMIZATION FEE)
+        EQUITY RECOVERY FEE
       </div>
       <div style={{ fontSize: 16, color: '#32D74B', fontWeight: 900, fontFamily: 'JetBrains Mono', letterSpacing: '0.05em' }}>
         ${fee.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}

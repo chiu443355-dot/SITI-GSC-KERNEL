@@ -195,29 +195,51 @@ class MIMIKernel:
         }
 
     def fit_lr(self, use_baseline: bool = False) -> float:
-        if use_baseline:
+        if use_baseline or self.df is None or self.df.empty:
             # Synthetic threshold based on baseline weights
             self.critical_rho = round(float(np.clip(abs(self.baseline_intercept) + self.baseline_hub_f - 1.2, 0.70, 0.95)), 4)
             return self.critical_rho
 
-        df = self.df.copy()
-        for col in ['Mode_of_Shipment', 'Product_importance', 'Warehouse_block', 'Gender']:
-            if col in df.columns:
-                df[f'{col}_enc'] = LabelEncoder().fit_transform(df[col].astype(str))
-        features = [c for c in [
-            'Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
-            'Prior_purchases', 'Discount_offered', 'Weight_in_gms',
-            'Mode_of_Shipment_enc', 'Product_importance_enc',
-            'Warehouse_block_enc', 'Gender_enc'
-        ] if c in df.columns]
-        X = df[features].values
-        y = df['Reached.on.Time_Y.N'].values
-        self.lr_model = LogisticRegression(max_iter=2000, random_state=42)
-        self.lr_model.fit(X, y)
-        proba_late = 1 - self.lr_model.predict_proba(X)[:, 1]
-        new_thresh = float(np.mean(proba_late) + 1.0 * np.std(proba_late))
-        self.critical_rho = round(float(np.clip(new_thresh, 0.70, 0.95)), 4)
-        return self.critical_rho
+        try:
+            df = self.df.copy()
+            # Handle Big Data Anomalies: Drop rows with missing targets or crucial features
+            df = df.dropna(subset=['Reached.on.Time_Y.N'])
+
+            if len(df) < 10: # Minimum scale for fitting
+                 raise ValueError("Insufficient clean data")
+
+            # Fill missing categorical features with mode
+            for col in ['Mode_of_Shipment', 'Product_importance', 'Warehouse_block', 'Gender']:
+                if col in df.columns:
+                    df[col] = df[col].fillna(df[col].mode()[0] if not df[col].mode().empty else 'Unknown')
+
+            # Fill missing numeric features with 0
+            num_cols = ['Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
+                        'Prior_purchases', 'Discount_offered', 'Weight_in_gms']
+            for col in num_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+            for col in ['Mode_of_Shipment', 'Product_importance', 'Warehouse_block', 'Gender']:
+                if col in df.columns:
+                    df[f'{col}_enc'] = LabelEncoder().fit_transform(df[col].astype(str))
+            features = [c for c in [
+                'Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
+                'Prior_purchases', 'Discount_offered', 'Weight_in_gms',
+                'Mode_of_Shipment_enc', 'Product_importance_enc',
+                'Warehouse_block_enc', 'Gender_enc'
+            ] if c in df.columns]
+            X = df[features].values
+            y = df['Reached.on.Time_Y.N'].values
+            self.lr_model = LogisticRegression(max_iter=2000, random_state=42)
+            self.lr_model.fit(X, y)
+            proba_late = 1 - self.lr_model.predict_proba(X)[:, 1]
+            new_thresh = float(np.mean(proba_late) + 1.0 * np.std(proba_late))
+            self.critical_rho = round(float(np.clip(new_thresh, 0.70, 0.95)), 4)
+            return self.critical_rho
+        except Exception as e:
+            logger.warning(f"Kernel Hardening Triggered: {e}. Defaulting to Baseline.")
+            return self.fit_lr(use_baseline=True)
 
 def _generate_dataset(n: int = 10999, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)

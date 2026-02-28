@@ -1,39 +1,23 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import os
 import logging
 import random
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import LabelEncoder
-from pathlib import Path
-from typing import Optional
 import io
 from datetime import datetime, timezone
 from mimi_kernel import MIMIKernel, _generate_dataset
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
-
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-app = FastAPI()
-api_router = APIRouter(prefix="/api")
+app = Flask(__name__)
+CORS(app)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
-# ─── MIMI KERNEL ─────────────────────────────────────────────────────────────
-# Moved to mimi_kernel.py
-
-
-# ─── SESSION STATE ────────────────────────────────────────────────────────────
+# ─── SESSION STATE (In-memory for Serverless) ──────────────────────────────────
+# Note: In a true serverless environment, this state would need to be in Redis or DB.
+# For Vercel's hobby tier, we'll keep it in-memory but it will reset on cold starts.
 
 _session: dict = {
     "mimi": None,
@@ -44,19 +28,20 @@ _session: dict = {
     "dataset_name": "SAFEXPRESS_CASE_02028317"
 }
 
+def get_mimi():
+    if _session["mimi"] is None:
+        df = _generate_dataset()
+        _session["mimi"] = MIMIKernel(df)
+        _session["mimi"].fit_lr(use_baseline=True)
+    return _session["mimi"]
 
-# ─── ROUTES ──────────────────────────────────────────────────────────────────
+@app.route("/api", methods=["GET"])
+def root():
+    return jsonify({"message": "SITI Intelligence — MIMI Kernel Active"})
 
-@api_router.get("/")
-async def root():
-    return {"message": "SITI Intelligence — MIMI Kernel Active"}
-
-
-@api_router.get("/kernel/state")
-async def get_kernel_state():
-    mimi: MIMIKernel = _session["mimi"]
-    if mimi is None:
-        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
+@app.route("/api/kernel/state", methods=["GET"])
+def get_kernel_state():
+    mimi = get_mimi()
 
     noise = float(np.random.normal(0, 0.008))
     rho_measured = float(np.clip(mimi.base_rho() + noise, 0.0, 1.0))
@@ -69,7 +54,7 @@ async def get_kernel_state():
     if len(_session["rho_history"]) > 30:
         _session["rho_history"].pop(0)
 
-    return {
+    return jsonify({
         "rho": round(rho_measured, 4),
         "rho_base": mimi.base_rho(),
         "phi": phi_val,
@@ -95,16 +80,13 @@ async def get_kernel_state():
         "revenue_saved": round(_session["revenue_saved"], 2),
         "refresh_count": _session["refresh_count"],
         "dataset_name": _session["dataset_name"]
-    }
+    })
 
-
-@api_router.post("/kernel/tick")
-async def kernel_tick():
-    mimi: MIMIKernel = _session["mimi"]
-    if mimi is None:
-        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
-
+@app.route("/api/kernel/tick", methods=["POST"])
+def kernel_tick():
+    mimi = get_mimi()
     rho_base = mimi.base_rho()
+
     if rho_base > 0.80:
         diverted = random.randint(12, 28)
     elif rho_base > 0.75:
@@ -116,20 +98,29 @@ async def kernel_tick():
     _session["revenue_saved"] = _session["diverted_units"] * mimi.LEAKAGE_SEED
     _session["refresh_count"] += 1
 
-    return {
+    return jsonify({
         "diverted": diverted,
         "total_diverted": _session["diverted_units"],
         "revenue_saved": round(_session["revenue_saved"], 2),
         "refresh_count": _session["refresh_count"]
-    }
+    })
 
+@app.route("/api/kernel/upload", methods=["POST"])
+def upload_dataset():
+    if 'file' not in request.files:
+        return jsonify({"detail": "No file part"}), 400
 
-@api_router.post("/kernel/upload")
-async def upload_dataset(file: UploadFile = File(...)):
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"detail": "No selected file"}), 400
+
     try:
-        content = await file.read()
-        df = pd.read_csv(io.BytesIO(content))
+        df = pd.read_csv(file)
 
+        # Immediate Data Sanitization for Big Data anomalies
+        df = df.dropna(subset=df.columns.intersection(['Reached.on.Time_Y.N', 'ID']), how='all')
+
+        # Column mapping logic
         col_map = {}
         for col in df.columns:
             lower = col.lower().replace(' ', '_').replace('.', '_')
@@ -159,26 +150,16 @@ async def upload_dataset(file: UploadFile = File(...)):
         df = df.rename(columns=col_map)
 
         if 'Reached.on.Time_Y.N' not in df.columns:
-            raise HTTPException(status_code=400, detail="Cannot find on-time delivery column")
+            return jsonify({"detail": "Cannot find on-time delivery column"}), 400
 
+        # Data Cleaning
         col = df['Reached.on.Time_Y.N']
         if col.dtype == object:
             df['Reached.on.Time_Y.N'] = col.map(
                 lambda x: 1 if str(x).strip().upper() in ['Y', 'YES', '1', 'TRUE'] else 0
-            ).astype(int)
+            ).fillna(0).astype(int)
         else:
-            df['Reached.on.Time_Y.N'] = col.astype(int)
-
-        if 'ID' not in df.columns:
-            df['ID'] = range(1, len(df) + 1)
-        for cat_col, default in [('Warehouse_block', 'A'), ('Mode_of_Shipment', 'Ship'),
-                                  ('Product_importance', 'Medium'), ('Gender', 'M')]:
-            if cat_col not in df.columns:
-                df[cat_col] = default
-        for num_col in ['Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
-                        'Prior_purchases', 'Discount_offered', 'Weight_in_gms']:
-            if num_col not in df.columns:
-                df[num_col] = 0
+            df['Reached.on.Time_Y.N'] = pd.to_numeric(col, errors='coerce').fillna(0).astype(int)
 
         new_kernel = MIMIKernel(df)
         new_critical_rho = new_kernel.fit_lr()
@@ -190,49 +171,17 @@ async def upload_dataset(file: UploadFile = File(...)):
         _session["rho_history"] = []
         _session["dataset_name"] = file.filename or "UPLOADED_DATASET"
 
-        return {
+        return jsonify({
             "success": True,
             "n_total": len(df),
             "new_rho": new_kernel.base_rho(),
             "new_critical_rho": new_critical_rho,
-            "message": f"MIMI Kernel reinitialized. ρ={new_kernel.base_rho():.4f}, ρ_c={new_critical_rho:.4f}",
+            "message": f"MIMI Kernel reinitialized. ρ={new_kernel.base_rho():.4f}",
             "dataset_name": _session["dataset_name"]
-        }
-    except HTTPException:
-        raise
+        })
     except Exception as e:
         logger.error(f"Upload error: {e}")
-        raise HTTPException(status_code=400, detail=f"CSV parse error: {str(e)}")
+        return jsonify({"detail": f"CSV parse error: {str(e)}"}), 400
 
-
-# ─── APP SETUP ────────────────────────────────────────────────────────────────
-
-app.include_router(api_router)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.on_event("startup")
-async def init_kernel():
-    import asyncio
-    df = _generate_dataset()
-    _session["mimi"] = MIMIKernel(df)
-    logger.info(f"MIMI Kernel initialized: n={len(df)}, ρ={_session['mimi'].base_rho():.4f}")
-    # Initialize with Safexpress Baseline Weights (Warm Start)
-    _session["mimi"].fit_lr(use_baseline=True)
-    logger.info(f"SITI Warm: ρ_c={_session['mimi'].critical_rho:.4f} (Baseline Weights)")
-    # Refit with full dataset in background
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _session["mimi"].fit_lr)
-    logger.info(f"LR Refit Complete: ρ_c={_session['mimi'].critical_rho:.4f}")
-
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=8000)
