@@ -12,6 +12,13 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
   const [showOverlay, setShowOverlay] = useState(false);
   const fileRef = useRef(null);
 
+  const [transitionLogs, setTransitionLogs] = useState([]);
+
+  const addLog = (msg) => {
+    const time = new Date().toLocaleTimeString();
+    setTransitionLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 5));
+  };
+
   const handleUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -20,17 +27,30 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
     setUploadError(null);
     // Trigger the "Genius Reset" overlay immediately on file selection
     setShowOverlay(true);
+
+    addLog("Initializing Data Injection...");
+    addLog("Wiping historical state...");
+
     setTimeout(() => setShowOverlay(false), 2500);
     try {
       const fd = new FormData();
       fd.append("file", file);
+
+      const startTime = performance.now();
       const res = await axios.post(`${apiBase}/kernel/upload`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
+      const endTime = performance.now();
+
+      addLog(`Instant Recalibration: ${(endTime - startTime).toFixed(2)}ms`);
+      addLog("Updating T+3 horizon vectors...");
+
       setUploadMsg(`GENIUS RESET COMPLETE — ${res.data.message}`);
       await onRefresh();
+      addLog("SITI Warm: State active.");
     } catch (err) {
       setUploadError(err.response?.data?.detail ?? 'Upload failed');
+      addLog("Injection error: Kernel fallback.");
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -284,6 +304,17 @@ export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
             ERROR: {uploadError}
           </div>
         )}
+
+        {/* Real-time State Transitions */}
+        <div style={{ marginTop: 12, border: '1px solid #141414', background: '#050505', padding: '6px 10px' }}>
+          <div style={{ fontSize: 7, color: '#333', letterSpacing: '0.1em', marginBottom: 4 }}>REAL-TIME STATE TRANSITIONS</div>
+          {transitionLogs.map((log, i) => (
+            <div key={i} style={{ fontFamily: 'JetBrains Mono', fontSize: 8, color: i === 0 ? '#FFB340' : '#444', letterSpacing: '0.05em' }}>
+              {log}
+            </div>
+          ))}
+          {transitionLogs.length === 0 && <div style={{ color: '#222', fontSize: 8 }}>STANDBY // WAITING FOR INJECTION</div>}
+        </div>
       </div>
 
       {/* RIGHT: PDF Export */}

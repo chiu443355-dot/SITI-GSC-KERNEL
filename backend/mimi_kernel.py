@@ -20,6 +20,9 @@ class MIMIKernel:
         self._kP: np.ndarray = np.eye(2)       # Covariance: 2x2
         self.critical_rho: float = 0.85
         self.lr_model = None
+        # Safexpress Baseline Weights (applied if fit_lr is not called)
+        self.baseline_intercept = -1.2
+        self.baseline_hub_f = 0.85
 
     def base_rho(self) -> float:
         late = int((self.df['Reached.on.Time_Y.N'] == 0).sum())
@@ -191,7 +194,12 @@ class MIMIKernel:
             "threshold": round(threshold, 4)
         }
 
-    def fit_lr(self) -> float:
+    def fit_lr(self, use_baseline: bool = False) -> float:
+        if use_baseline:
+            # Synthetic threshold based on baseline weights
+            self.critical_rho = round(float(np.clip(abs(self.baseline_intercept) + self.baseline_hub_f - 1.2, 0.70, 0.95)), 4)
+            return self.critical_rho
+
         df = self.df.copy()
         for col in ['Mode_of_Shipment', 'Product_importance', 'Warehouse_block', 'Gender']:
             if col in df.columns:

@@ -224,10 +224,13 @@ async def init_kernel():
     df = _generate_dataset()
     _session["mimi"] = MIMIKernel(df)
     logger.info(f"MIMI Kernel initialized: n={len(df)}, ρ={_session['mimi'].base_rho():.4f}")
-    # Fit LR in background (non-blocking)
+    # Initialize with Safexpress Baseline Weights (Warm Start)
+    _session["mimi"].fit_lr(use_baseline=True)
+    logger.info(f"SITI Warm: ρ_c={_session['mimi'].critical_rho:.4f} (Baseline Weights)")
+    # Refit with full dataset in background
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _session["mimi"].fit_lr)
-    logger.info(f"LR fitted: ρ_c={_session['mimi'].critical_rho:.4f}")
+    logger.info(f"LR Refit Complete: ρ_c={_session['mimi'].critical_rho:.4f}")
 
 
 @app.on_event("shutdown")

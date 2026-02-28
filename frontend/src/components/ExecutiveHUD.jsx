@@ -24,6 +24,20 @@ function SITILogo({ size = 34 }) {
   );
 }
 
+function PerformanceFeeCalculator({ totalDiverted, leakageSeed }) {
+  const fee = (totalDiverted * leakageSeed) * 0.10;
+  return (
+    <div style={{ textAlign: 'right', borderLeft: '1px solid #1A1A1A', paddingLeft: 20 }}>
+      <div style={{ fontSize: 8, color: '#64D2FF', letterSpacing: '0.12em', fontWeight: 700 }}>
+        REAL-TIME EQUITY RECOVERY (10% OPTIMIZATION FEE)
+      </div>
+      <div style={{ fontSize: 16, color: '#32D74B', fontWeight: 900, fontFamily: 'JetBrains Mono', letterSpacing: '0.05em' }}>
+        ${fee.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      </div>
+    </div>
+  );
+}
+
 export default function ExecutiveHUD({ kState, ticker, catastrophe }) {
   const rho = kState?.rho ?? 0;
   const status = rho > 0.85 ? 'COLLAPSE' : rho > 0.80 ? 'CRITICAL' : rho > 0.75 ? 'WARNING' : 'NOMINAL';
@@ -49,44 +63,44 @@ export default function ExecutiveHUD({ kState, ticker, catastrophe }) {
     <div
       data-testid="executive-hud"
       style={{
-        background: '#080808',
-        borderBottom: `1px solid ${catastrophe ? '#FF3B3044' : '#1F1F1F'}`,
+        background: '#000000',
+        borderBottom: `2px solid ${catastrophe ? '#FF3B30' : '#2A2A2A'}`,
         display: 'flex',
         flexDirection: 'column',
         position: 'sticky',
         top: 0,
         zIndex: 100,
-        transition: 'border-color 0.3s',
+        transition: 'border-color 0.15s',
       }}
     >
       {/* Top Row: Logo + Status */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px', borderBottom: '1px solid #141414' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 16px', borderBottom: '1px solid #1A1A1A' }}>
 
         {/* SITI Identity */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <SITILogo size={34} />
+            <SITILogo size={36} />
             <div>
-              <div style={{ fontFamily: 'Chivo, sans-serif', fontWeight: 900, fontSize: 15, color: '#FFB340', letterSpacing: '0.18em' }}>
+              <div style={{ fontFamily: 'Chivo, sans-serif', fontWeight: 900, fontSize: 16, color: '#FFB340', letterSpacing: '0.15em' }}>
                 SITI INTELLIGENCE
               </div>
-              <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.1em', marginTop: 1 }}>
-                LOGIC FOR THE PARADOX // POWERED BY MIMI
+              <div style={{ fontSize: 9, color: '#666', letterSpacing: '0.12em', fontWeight: 700, marginTop: 1 }}>
+                LOGIC FOR THE PARADOX // PROPRIETARY KERNEL V2.0
               </div>
             </div>
           </div>
 
-          <div style={{ width: 1, height: 28, background: '#1F1F1F', margin: '0 8px' }} />
+          <div style={{ width: 1, height: 32, background: '#333', margin: '0 10px' }} />
 
-          <div style={{ fontSize: 9, letterSpacing: '0.1em' }}>
-            <span style={{ color: '#555' }}>CASE </span>
+          <div style={{ fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, fontFamily: 'JetBrains Mono' }}>
+            <span style={{ color: '#444' }}>CASE </span>
             <span style={{ color: '#64D2FF' }}>#02028317</span>
           </div>
 
-          <div style={{ width: 1, height: 28, background: '#1F1F1F', margin: '0 4px' }} />
+          <div style={{ width: 1, height: 32, background: '#333', margin: '0 6px' }} />
 
-          <div style={{ fontSize: 8, color: '#3A3A3A', letterSpacing: '0.12em', fontStyle: 'italic' }}>
-            We control the curve.
+          <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.1em', fontWeight: 500 }}>
+            AUDIT_MODE: STABLE_HORIZON
           </div>
         </div>
 
@@ -103,6 +117,9 @@ export default function ExecutiveHUD({ kState, ticker, catastrophe }) {
               <span style={{ fontSize: 12, fontWeight: 700, color: statusColor, letterSpacing: '0.1em' }}>{status}</span>
             </div>
           </div>
+
+          <PerformanceFeeCalculator totalDiverted={ticker?.total_diverted ?? 0} leakageSeed={kState?.leakage_seed ?? 3.94} />
+
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.1em' }}>REFRESH</div>
             <div style={{ fontSize: 12, color: '#A1A1AA' }}>#{ticker?.refresh_count ?? 0}</div>
