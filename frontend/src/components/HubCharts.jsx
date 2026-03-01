@@ -57,7 +57,6 @@ export default function HubCharts({ kState }) {
     time: h.time,
     rho_pct: +(h.rho * 100).toFixed(2),
     t1_pct: +(h.t1 * 100).toFixed(2),
-    t3_pct: +(h.t3 * 100).toFixed(2),
   }));
 
   return (
@@ -155,11 +154,11 @@ export default function HubCharts({ kState }) {
         style={{ background: '#0A0A0A', border: '1px solid #1F1F1F', padding: '10px 12px', gridColumn: '1 / -1' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <div style={{ fontSize: 9, color: '#A1A1AA', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-            ρ REAL-TIME TRAJECTORY · KALMAN T+3 PROJECTION
+            ρ REAL-TIME TRAJECTORY · KALMAN T+1 PROJECTION
           </div>
           <div style={{ display: 'flex', gap: 14, fontSize: 9 }}>
             <span><span style={{ color: '#FFB340' }}>—</span> <span style={{ color: '#666' }}>ρ observed</span></span>
-            <span><span style={{ color: '#64D2FF' }}>—</span> <span style={{ color: '#666' }}>T+3 predicted</span></span>
+            <span><span style={{ color: '#64D2FF' }}>—</span> <span style={{ color: '#666' }}>T+1 predicted</span></span>
             <span><span style={{ color: '#FF3B30' }}>—</span> <span style={{ color: '#666' }}>0.80 diversion</span></span>
             <span><span style={{ color: '#FF6B6B' }}>···</span> <span style={{ color: '#666' }}>0.85 collapse</span></span>
           </div>
@@ -175,10 +174,6 @@ export default function HubCharts({ kState }) {
                 <stop offset="5%" stopColor="#64D2FF" stopOpacity={0.2} />
                 <stop offset="95%" stopColor="#64D2FF" stopOpacity={0} />
               </linearGradient>
-              <linearGradient id="t3Grad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#64D2FF" stopOpacity={0.1} />
-                <stop offset="95%" stopColor="#64D2FF" stopOpacity={0} />
-              </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="2 4" stroke="#141414" />
             <XAxis dataKey="time" stroke="#2A2A2A"
@@ -190,8 +185,8 @@ export default function HubCharts({ kState }) {
             <ReferenceLine y={85} stroke="#FF3B3044" strokeDasharray="2 3" label={{ value: '0.85', fill: '#FF6B6B', fontSize: 8 }} />
             <Area type="monotone" dataKey="rho_pct" stroke="#FFB340" strokeWidth={2}
               fill="url(#rhoGrad)" dot={false} name="ρ observed" />
-            <Area type="monotone" dataKey="t3_pct" stroke="#64D2FF" strokeWidth={1} strokeDasharray="4 2"
-              fill="url(#t3Grad)" dot={false} name="T+3 predicted" />
+            <Area type="monotone" dataKey="t1_pct" stroke="#64D2FF" strokeWidth={1} strokeDasharray="4 2"
+              fill="url(#t1Grad)" dot={false} name="T+1 predicted" />
           </AreaChart>
         </ResponsiveContainer>
       </div>
