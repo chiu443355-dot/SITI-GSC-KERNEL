@@ -3,7 +3,7 @@ import axios from "axios";
 import Dashboard from "./components/Dashboard";
 import "./App.css";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const API = "/api";
 
 function App() {
   const [kState, setKState] = useState(null);
