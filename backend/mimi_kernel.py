@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class MIMIKernel:
     LEAKAGE_SEED = 3.94
-    ANNUALIZED_EXPOSURE = 2_810_000
+    BASE_EXPOSURE = 2_810_000
 
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
@@ -193,6 +193,11 @@ class MIMIKernel:
             "epsilon": epsilon,
             "threshold": round(threshold, 4)
         }
+
+    def get_exposure(self) -> int:
+        """Dynamic exposure based on dataset scale"""
+        scale_factor = self.n_total / 10999
+        return int(self.BASE_EXPOSURE * scale_factor)
 
     def fit_lr(self, use_baseline: bool = False) -> float:
         if use_baseline or self.df is None or self.df.empty:

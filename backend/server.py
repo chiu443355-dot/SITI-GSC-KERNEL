@@ -74,7 +74,7 @@ def get_kernel_state():
         "catastrophe_predicted": kalman["rho_t3"] > 0.80,
         "collapse_predicted": kalman["rho_t3"] >= 0.85,
         "rho_history": _session["rho_history"][-30:],
-        "annualized_exposure": mimi.ANNUALIZED_EXPOSURE,
+        "annualized_exposure": mimi.get_exposure(),
         "leakage_seed": mimi.LEAKAGE_SEED,
         "diverted_units": _session["diverted_units"],
         "revenue_saved": round(_session["revenue_saved"], 2),

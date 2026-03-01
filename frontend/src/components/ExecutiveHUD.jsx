@@ -54,7 +54,8 @@ export default function ExecutiveHUD({ kState, ticker, catastrophe }) {
     { label: 'SAVED', value: `$${ticker?.revenue_saved?.toLocaleString('en-US', { minimumFractionDigits: 2 }) ?? '0.00'}`, color: '#32D74B' },
     { label: 'DIVERTED', value: `${ticker?.total_diverted?.toLocaleString() ?? 0} UNITS`, color: '#FFB340' },
     { label: 'RECORDS', value: kState?.n_total?.toLocaleString() ?? '---', color: '#A1A1AA' },
-    { label: 'EXPOSURE', value: '$2.81M', color: '#FF3B30' },
+    { label: 'POTENTIAL SAVINGS', value: `$${(ticker?.total_diverted * (kState?.leakage_seed ?? 3.94)).toLocaleString('en-US', { minimumFractionDigits: 2 })}`, color: '#32D74B' },
+    { label: 'EXPOSURE', value: `$${(kState?.annualized_exposure ?? 2810000).toLocaleString()}`, color: '#FF3B30' },
     { label: 'DATASET', value: kState?.dataset_name ?? 'LOADING', color: '#A1A1AA' },
     { label: 'ρ_CRITICAL', value: kState?.critical_rho?.toFixed(4) ?? '0.8500', color: '#FF9F0A' },
   ];
@@ -82,7 +83,7 @@ export default function ExecutiveHUD({ kState, ticker, catastrophe }) {
             <SITILogo size={36} />
             <div>
               <div style={{ fontFamily: 'Chivo, sans-serif', fontWeight: 900, fontSize: 16, color: '#FFB340', letterSpacing: '0.15em' }}>
-                SITI INTELLIGENCE
+                SITI INTELLIGENCE HUD
               </div>
               <div style={{ fontSize: 9, color: '#666', letterSpacing: '0.12em', fontWeight: 700, marginTop: 1 }}>
                 LOGIC FOR THE PARADOX // PROPRIETARY KERNEL V2.0
@@ -108,7 +109,9 @@ export default function ExecutiveHUD({ kState, ticker, catastrophe }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.1em' }}>ANNUALIZED EXPOSURE</div>
-            <div style={{ fontSize: 16, color: '#FF3B30', fontWeight: 700, letterSpacing: '0.05em' }}>$2,810,000</div>
+            <div style={{ fontSize: 16, color: '#FF3B30', fontWeight: 700, letterSpacing: '0.05em' }}>
+              ${(kState?.annualized_exposure ?? 2810000).toLocaleString()}
+            </div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.1em' }}>HUB STATUS</div>
