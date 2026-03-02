@@ -13,8 +13,8 @@ function App() {
   const fetchState = useCallback(async () => {
     try {
       const [stateRes, tickRes] = await Promise.all([
-        axios.get(`${API}/kernel/state`),
-        axios.post(`${API}/kernel/tick`)
+        axios.get("/api/kernel/state"),
+        axios.post("/api/kernel/tick")
       ]);
       setKState(stateRes.data);
       setTicker(tickRes.data);
