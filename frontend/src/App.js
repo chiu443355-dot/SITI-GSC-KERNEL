@@ -3,8 +3,6 @@ import axios from "axios";
 import Dashboard from "./components/Dashboard";
 import "./App.css";
 
-const API = "/api";
-
 function App() {
   const [kState, setKState] = useState(null);
   const [ticker, setTicker] = useState({ total_diverted: 0, revenue_saved: 0, refresh_count: 0 });
