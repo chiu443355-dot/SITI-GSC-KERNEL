@@ -24,10 +24,10 @@ export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh 
             </svg>
           </div>
           <div style={{ color: '#FFB340', fontFamily: 'Chivo, sans-serif', fontWeight: 900, fontSize: 16, letterSpacing: '0.2em' }}>
-            SITI INTELLIGENCE
+            SITI INTELLIGENCE HUD
           </div>
           <div style={{ color: '#555', fontFamily: 'JetBrains Mono', fontSize: 10, letterSpacing: '0.18em', marginTop: 4 }}>
-            LOGIC FOR THE PARADOX // POWERED BY MIMI
+            LOGIC FOR THE PARADOX // PROPRIETARY KERNEL V2.0
           </div>
           <div style={{ color: '#A1A1AA', fontFamily: 'JetBrains Mono', fontSize: 11, marginTop: 16, letterSpacing: '0.12em' }}>
             INITIALIZING MIMI KERNEL...
@@ -109,11 +109,11 @@ export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh 
             color="#FF3B30" testId="kpi-failure-rate" />
           <KPICard label="LEAKAGE  $1.20 + $2.74" value={`$${kState?.inverse_reliability?.leakage_total?.toLocaleString('en-US', { minimumFractionDigits: 0 }) ?? '0'}`} unit="total priority leakage"
             color="#FF9F0A" testId="kpi-leakage" />
-          <KPICard label="ANNUALIZED EXPOSURE" value="$2.81M" unit="AUDIT BASELINE"
+          <KPICard label="ANNUALIZED EXPOSURE" value={`$${((kState?.annualized_exposure ?? 2810000) / 1000000).toFixed(2)}M`} unit="AUDIT BASELINE"
             color="#FF3B30" testId="kpi-exposure" />
-          <KPICard label="KALMAN T+1 · 45-MIN" value={kState?.kalman?.rho_t1?.toFixed(4)} unit=""
+          <KPICard label="KALMAN T+3 · 135-MIN" value={kState?.kalman?.rho_t3?.toFixed(4)} unit=""
             color={kState?.collapse_predicted ? '#FF3B30' : kState?.catastrophe_predicted ? '#FF9F0A' : '#32D74B'}
-            testId="kpi-kalman-t1" />
+            testId="kpi-kalman-t3" />
         </div>
 
         {/* CENTER: MIMI Panel + Charts */}
@@ -198,12 +198,12 @@ function KalmanWidget({ kState }) {
       style={{ background: '#0A0A0A', border: `1px solid ${isCollapse ? '#FF3B30' : isCritical ? '#FF9F0A' : '#1F1F1F'}`, padding: '12px' }}
     >
       <div style={{ color: '#A1A1AA', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>
-        KALMAN STATE ESTIMATOR // 45-MIN T+1
+        KALMAN STATE ESTIMATOR // 135-MIN T+3
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
         {[
           { label: 'x̂_k', value: k?.x_hat?.toFixed(4), color: '#64D2FF' },
-          { label: 'T+1', value: k?.rho_t1?.toFixed(4), color: isCollapse ? '#FF3B30' : isCritical ? '#FF9F0A' : '#32D74B' },
+          { label: 'T+3', value: k?.rho_t3?.toFixed(4), color: isCollapse ? '#FF3B30' : isCritical ? '#FF9F0A' : '#32D74B' },
           { label: 'K', value: k?.K?.toFixed(4), color: '#FFB340' },
           { label: 'P', value: k?.P?.toExponential(2), color: '#A1A1AA' },
         ].map(({ label, value, color }) => (
@@ -214,7 +214,7 @@ function KalmanWidget({ kState }) {
         ))}
       </div>
       <div style={{ marginTop: 8, color: '#555', fontSize: 9, letterSpacing: '0.08em' }}>
-        Q=0.002 · R=0.005 · F=I · H=I · T+1≡45min
+        Q=f(Φ') · R=0.005 · F=[[1,1],[0,1]] · T+3≡135min
       </div>
     </div>
   );
