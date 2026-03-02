@@ -37,7 +37,7 @@ export default function DataInjection({ onRefresh, kState, ticker }) {
       fd.append("file", file);
 
       const startTime = performance.now();
-      const res = await axios.post(`/api/kernel/upload`, fd, {
+      const res = await axios.post('/api/kernel/upload', fd, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       const endTime = performance.now();
