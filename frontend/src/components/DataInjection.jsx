@@ -5,7 +5,7 @@ import axios from "axios";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
-export default function DataInjection({ apiBase, onRefresh, kState, ticker }) {
+export default function DataInjection({ onRefresh, kState, ticker }) {
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState(null);
   const [uploadError, setUploadError] = useState(null);

@@ -6,7 +6,7 @@ import HubCharts from "./HubCharts";
 import FailureTable from "./FailureTable";
 import DataInjection from "./DataInjection";
 
-export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh }) {
+export default function Dashboard({ kState, ticker, loading, onRefresh }) {
   const catastrophe = kState?.catastrophe;   // ρ > 0.80
   const collapse = kState?.collapse;          // ρ ≥ 0.85
 
@@ -132,7 +132,7 @@ export default function Dashboard({ kState, ticker, loading, apiBase, onRefresh 
       </div>
 
       {/* Bottom: Data Injection */}
-      <DataInjection apiBase={apiBase} onRefresh={onRefresh} kState={kState} ticker={ticker} />
+      <DataInjection onRefresh={onRefresh} kState={kState} ticker={ticker} />
     </div>
   );
 }

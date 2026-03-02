@@ -37,7 +37,6 @@ function App() {
         kState={kState}
         ticker={ticker}
         loading={loading}
-        apiBase={API}
         onRefresh={fetchState}
       />
     </div>
