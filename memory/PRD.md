@@ -56,7 +56,17 @@ Build "SITI Intelligence," a SaaS Web Dashboard for predictive logistics recover
 - Two-level catastrophe alert (ρ>0.80 and ρ≥0.85)
 - Recharts: Average Delay per Warehouse Block + Red Zone Importance charts
 
-### v2.1 (Mar 04, 2026 — UI/UX Emergency Overhaul)
+### v3.0 (Mar 04, 2026 — Enterprise Pitch Overhaul)
+- **Chart Sizing**: All 3 Recharts containers raised to 450px height (bar, pie, area)
+- **HIGH CONTRAST DARK tooltips**: All tooltips now use white background (#FFFFFF) + black text (#000000)
+- **Neon Green Kalman Line**: T+1 Kalman Projection is now `stroke="#39FF14"` dashed `strokeDasharray="10 5"`
+- **Variable Stroke Width**: Kalman line thickness scales with avg gap between observed and predicted (1.5–5.5px)
+- **Ghost Trigger**: "SIMULATE LIVE STREAM" injects 50 virtual units/second, auto-stops after 90 ticks; mutually exclusive with normal stream
+- **LIVE INFERENCE badge**: Pulsing neon green badge in ExecutiveHUD top-right when Ghost Trigger or Live Stream is active
+- **Client-Side Pre-Processor**: `PRE_PROCESSOR_MAP` dict in DataInjection.jsx with 11 field mappings + fuzzy keyword matching
+- **Schema Mismatch UI**: Structured 400 error returns `found_columns` + `required_unmapped`; frontend shows `<SchemaMapper>` with per-column dropdowns and "APPLY MAPPING & REPROCESS" button
+- **Regex Sanitizer**: `_sanitize_numeric()` strips '100kg'→100, '$5.00'→5.00, '3,500'→3500 before Kernel ingest
+- **$2.81M Exposure**: Always anchored top-right in ExecutiveHUD, never hidden
 - **PDF Stabilization**: Removed dynamic await import() — static jsPDF + autoTable imports
 - **Full-Screen Calibration Overlay**: Scrolling amber kernel weights background + progress bar
 - **Kill Zone Badge**: Dashed red "COLLAPSE THRESHOLD ρ=0.85" badge on bar chart
