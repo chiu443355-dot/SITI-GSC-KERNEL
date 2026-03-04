@@ -12,6 +12,8 @@ function App() {
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [isStreaming, setIsStreaming]     = useState(false);
   const [isGhostMode, setIsGhostMode]    = useState(false);
+  const [mu, setMu]             = useState(150);
+  const [activeTab, setActiveTab] = useState("network");
   const streamRef     = useRef(null);
   const ghostRef      = useRef(null);
   const ghostCountRef = useRef(0);
@@ -24,6 +26,7 @@ function App() {
       ]);
       setKState(stateRes.data);
       setTicker(tickRes.data);
+      if (stateRes.data?.mu) setMu(stateRes.data.mu);
       setLoading(false);
     } catch (e) {
       console.error("MIMI Kernel fetch error:", e);
@@ -31,7 +34,16 @@ function App() {
     }
   }, []);
 
-  /* ── Normal Live Stream: 100 units / 10s ─────────────── */
+  const handleMuChange = useCallback(async (newMu) => {
+    setMu(newMu);
+    try {
+      await axios.post(`${API}/kernel/set-mu`, { mu: newMu });
+      await fetchState();
+    } catch (e) {
+      console.error("Set mu error:", e);
+    }
+  }, [fetchState]);
+
   const startLiveStream = useCallback(async () => {
     setIsStreaming(true);
     const push = async () => {
@@ -49,9 +61,7 @@ function App() {
     if (streamRef.current) { clearInterval(streamRef.current); streamRef.current = null; }
   }, []);
 
-  /* ── Ghost Trigger: 50 units / 1s, auto-stops at 90s ─── */
   const startGhostMode = useCallback(async () => {
-    // Halt normal stream if running
     if (streamRef.current) { clearInterval(streamRef.current); streamRef.current = null; setIsStreaming(false); }
     setIsGhostMode(true);
     ghostCountRef.current = 0;
@@ -77,14 +87,12 @@ function App() {
     if (ghostRef.current) { clearInterval(ghostRef.current); ghostRef.current = null; }
   }, []);
 
-  /* ── Periodic 4-second state refresh ─────────────────── */
   useEffect(() => {
     fetchState();
     const id = setInterval(fetchState, 4000);
     return () => clearInterval(id);
   }, [fetchState]);
 
-  /* ── Cleanup on unmount ───────────────────────────────── */
   useEffect(() => () => {
     if (streamRef.current) clearInterval(streamRef.current);
     if (ghostRef.current)  clearInterval(ghostRef.current);
@@ -106,6 +114,10 @@ function App() {
         isGhostMode={isGhostMode}
         onGhostStart={startGhostMode}
         onGhostStop={stopGhostMode}
+        mu={mu}
+        onMuChange={handleMuChange}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
       />
     </div>
   );

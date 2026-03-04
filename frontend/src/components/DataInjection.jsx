@@ -151,6 +151,7 @@ export default function DataInjection({
   onCalibrating,
   isStreaming, onStreamStart, onStreamStop,
   isGhostMode, onGhostStart, onGhostStop,
+  mu, onMuChange,
 }) {
   const [uploading, setUploading]         = React.useState(false);
   const [uploadMsg, setUploadMsg]         = React.useState(null);
@@ -279,11 +280,11 @@ export default function DataInjection({
     doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
     [
-      `ρ = N_late / N_total = ${rho.toFixed(4)}`,
+      `ρ = λ/μ = ${(kState?.total_lambda ?? 0).toFixed(1)} / ${((kState?.mu ?? 150) * 3).toFixed(0)} = ${rho.toFixed(4)}`,
       `Φ(ρ) = 1/(1+exp(-20(ρ-${(kState?.critical_rho ?? 0.85).toFixed(2)}))) = ${phi.toFixed(4)}`,
       `L = $3.94 × ${irp?.failure_count ?? 0} = $${irp?.leakage_total?.toFixed(2) ?? "0.00"}`,
       `Wq = ρ/(1-ρ) = ${(kState?.wq ?? 0).toFixed(4)}`,
-      `x̂_{k+1} = x̂_k + K(z_k - x̂_k)  K=${(kState?.kalman?.K ?? 0).toFixed(4)}`,
+      `x = [ρ, ρ_dot] · F=[[1,dt],[0,1]] · T+3 = ${kState?.kalman?.rho_t3?.toFixed(4) ?? "—"}`,
     ].forEach(f => { doc.text(f, 14, y); y += 6; });
 
     y += 4;
@@ -318,7 +319,7 @@ export default function DataInjection({
     <div data-testid="data-injection-module"
       style={{ margin: "0 16px 16px", background: "#0A0A0A", border: "1px solid #1F1F1F", padding: "14px 16px" }}>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+      <div className="data-injection-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
 
         {/* ── COL 1: Genius Reset ──────────────────────────── */}
         <div>
@@ -431,11 +432,48 @@ export default function DataInjection({
           </div>
         </div>
 
-        {/* ── COL 3: Live Stream + Ghost Trigger ───────────── */}
+        {/* ── COL 3: Service Capacity + Live Stream ──────── */}
         <div>
           <div style={{ fontSize: 9, color: "#D4D4D8", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 8 }}>
-            LIVE TELEMETRY — INFERENCE ENGINE
+            SERVICE CAPACITY (μ) CONTROL
           </div>
+          <div style={{ fontSize: 9, color: "#888", marginBottom: 12, lineHeight: 1.6 }}>
+            Adjust service capacity per hub. ρ = λ/μ recalculates in real-time.
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            <input
+              data-testid="mu-slider"
+              type="range"
+              min="50"
+              max="500"
+              step="5"
+              value={mu ?? 150}
+              onChange={e => onMuChange?.(Number(e.target.value))}
+              style={{ flex: 1, accentColor: "#32D74B", cursor: "pointer" }}
+            />
+            <div style={{
+              background: "#0D0D0D", border: "1px solid #32D74B", padding: "4px 10px",
+              fontFamily: "JetBrains Mono", fontSize: 13, color: "#32D74B", fontWeight: 700,
+              minWidth: 80, textAlign: "center",
+            }}>
+              μ = {mu ?? 150}
+            </div>
+          </div>
+          <div style={{ fontSize: 8, color: "#555", lineHeight: 1.7, marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 5 }}>
+              <span style={{ color: "#32D74B" }}>›</span>
+              <span style={{ color: "#888" }}>μ = {mu ?? 150} units/hr per hub</span>
+            </div>
+            <div style={{ display: "flex", gap: 5 }}>
+              <span style={{ color: "#32D74B" }}>›</span>
+              <span style={{ color: "#888" }}>Network capacity: {((mu ?? 150) * 3)} units/hr</span>
+            </div>
+            <div style={{ display: "flex", gap: 5 }}>
+              <span style={{ color: "#32D74B" }}>›</span>
+              <span style={{ color: "#888" }}>Global ρ = λ/Σμ = {kState?.global_rho?.toFixed(4) ?? "—"}</span>
+            </div>
+          </div>
+          <div style={{ borderTop: "1px solid #1A1A1A", paddingTop: 12 }}>
           <div style={{ fontSize: 9, color: "#888", marginBottom: 12, lineHeight: 1.6 }}>
             Two modes to demonstrate the MIMI Engine without a CSV.
           </div>
@@ -505,6 +543,7 @@ export default function DataInjection({
                 <span style={{ fontSize: 9, color: "#39FF14", fontFamily: "JetBrains Mono" }}>50/s ACTIVE</span>
               )}
             </div>
+          </div>
           </div>
         </div>
 

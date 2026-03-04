@@ -2,6 +2,7 @@ from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel
 import os
 import re
 import logging
@@ -29,85 +30,155 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-# ─── MIMI KERNEL ─────────────────────────────────────────────────────────────
+# ─── CONSTANTS ────────────────────────────────────────────────────────────────
+T_OPERATIONAL = 36.0  # hours — operational window for λ estimation
+HUB_BLOCK_MAP = {
+    "Alpha": ["A", "B"],
+    "Beta":  ["C", "D"],
+    "Gamma": ["F"],
+}
 
-class MIMIKernel:
-    LEAKAGE_SEED = 3.94
-    ANNUALIZED_EXPOSURE = 2_810_000
 
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
-        self.n_total = len(df)
-        self._kx: Optional[float] = None
-        self._kP: float = 1.0
-        self._rho_trend: list = []   # tracks recent ρ for A estimation
-        self.critical_rho: float = 0.85
-        self.lr_model = None
+# ─── 2D KALMAN HUB NODE ──────────────────────────────────────────────────────
+class HubNode:
+    """
+    Network distribution hub — Queueing Theory ρ = λ/μ
+    2D Kalman state vector x = [ρ, ρ̇]^T
+    Transition: F = [[1, Δt], [0, 1]]  (constant-velocity model)
+    """
+    def __init__(self, name: str, lambda_rate: float, mu: float = 150.0):
+        self.name = name
+        self.lambda_rate = lambda_rate
+        self.mu = mu
+        self._kx: Optional[np.ndarray] = None
+        self._kP: np.ndarray = np.eye(2) * 0.1
+        self.rho_history: list = []
+        self.saturation_protocol: bool = False
+        self._prev_lambda: float = lambda_rate
 
-    def base_rho(self) -> float:
-        late = int((self.df['Reached.on.Time_Y.N'] == 0).sum())
-        return round(float(late / self.n_total), 4)
+    @property
+    def rho(self) -> float:
+        """ρ = λ/μ — standard M/M/1 utilization."""
+        if self.mu <= 0:
+            return 99.0
+        return float(self.lambda_rate / self.mu)
 
-    K_DECAY = 20  # Sigmoidal decay gradient
+    def check_thundering_herd(self, new_lambda: float) -> bool:
+        """IMMEDIATE SATURATION PROTOCOL: trigger if λ spikes >40% in one tick."""
+        if self._prev_lambda > 1.0:
+            spike = (new_lambda - self._prev_lambda) / self._prev_lambda
+            if spike > 0.40:
+                self.saturation_protocol = True
+                self._prev_lambda = new_lambda
+                return True
+        self.saturation_protocol = False
+        self._prev_lambda = new_lambda
+        return False
 
-    def phi(self, rho_val: float) -> float:
-        """Sigmoidal Priority Decay: Φ(ρ) = 1/(1 + e^{-k(ρ - ρ_c)})  k=20, ρ_c=critical"""
-        return round(float(1 / (1 + np.exp(-self.K_DECAY * (rho_val - self.critical_rho)))), 4)
-
-    def wq(self, rho_val: float) -> float:
-        """M/M/1 Queue Wait: Wq = ρ / (μ(1-ρ)), μ=1 normalized"""
-        if rho_val >= 1.0:
-            return 99.9999
-        return round(float(rho_val / (1 - rho_val)), 4)
-
-    def kalman_step(self, z: float) -> dict:
+    def kalman_step_2d(self, z_rho: float, dt: float = 1.0) -> dict:
         """
-        T+1 (45-min) and T+3 (135-min) Kalman state-space projections.
-        A is estimated from recent ρ trend; T+3 uses A³ compound transition.
-        PVI = |ρ_now − ρ_T3| × 100  (percentage points of predictive volatility).
+        2D Kalman Filter — x = [ρ, ρ̇]^T
+        F = [[1, dt], [0, 1]], H = [[1, 0]]
+        T+1 = ρ + dt·ρ̇  (45-min)
+        T+3 = ρ + 3·dt·ρ̇ (135-min) + cumulative strain if saturation active
         """
-        Q, R = 0.002, 0.005
+        Q = np.diag([0.002, 0.001])
+        R = np.array([[0.005]])
+        H = np.array([[1.0, 0.0]])
+        F = np.array([[1.0, dt], [0.0, 1.0]])
+
         if self._kx is None:
-            self._kx, self._kP = z, 1.0
+            self._kx = np.array([z_rho, 0.0])
+            self._kP = np.eye(2) * 0.1
 
-        # --- Standard Kalman predict & update ---
-        x_pred = self._kx
-        P_pred = self._kP + Q
-        K      = float(P_pred / (P_pred + R))
-        self._kx = float(x_pred + K * (z - x_pred))
-        self._kP = float((1 - K) * P_pred)
+        # Predict
+        x_pred = F @ self._kx
+        P_pred = F @ self._kP @ F.T + Q
 
-        # --- A estimation from recent trend (max 8 ticks) ---
-        self._rho_trend.append(z)
-        if len(self._rho_trend) > 8:
-            self._rho_trend.pop(0)
+        # Update
+        y = np.array([z_rho]) - H @ x_pred
+        S = H @ P_pred @ H.T + R
+        K = P_pred @ H.T @ np.linalg.inv(S)
 
-        if len(self._rho_trend) >= 3:
-            diffs = [self._rho_trend[i] - self._rho_trend[i - 1]
-                     for i in range(1, len(self._rho_trend))]
-            avg_drift = sum(diffs) / len(diffs)
-            A = float(np.clip(1.0 + (avg_drift / z if z > 0.01 else 0.0), 0.97, 1.06))
-        else:
-            A = 1.0
+        self._kx = x_pred + (K @ y).flatten()
+        self._kP = (np.eye(2) - K @ H) @ P_pred
 
-        # --- T+1 (45-min): A¹ × x̂ + small observation noise ---
-        rho_t1 = float(np.clip(self._kx * A + np.random.normal(0, 0.010), 0.0, 1.0))
-        # --- T+3 (135-min): A³ × x̂ (deterministic state-space compound projection) ---
-        rho_t3 = float(np.clip(self._kx * (A ** 3), 0.0, 1.0))
+        rho_hat = float(self._kx[0])
+        rho_dot = float(self._kx[1])
+        rho_t1 = float(np.clip(rho_hat + dt * rho_dot, 0.0, 1.5))
+        rho_t3_raw = float(rho_hat + 3.0 * dt * rho_dot)
 
-        # --- Predictive Volatility Index ---
-        pvi = round(abs(z - rho_t3) * 100, 2)
+        # Cumulative network strain under saturation protocol
+        strain = 0.05 if self.saturation_protocol else 0.0
+        rho_t3 = float(np.clip(rho_t3_raw + strain, 0.0, 1.5))
+        pvi = round(abs(z_rho - rho_t3) * 100, 2)
 
         return {
-            "x_hat":   round(self._kx, 4),
-            "P":       round(self._kP, 6),
-            "K":       round(K, 4),
-            "A":       round(A, 4),
-            "A3":      round(A ** 3, 4),
+            "x_hat":   round(rho_hat, 4),
+            "rho_dot": round(rho_dot, 6),
+            "P":       round(float(np.trace(self._kP)), 6),
+            "K":       [round(float(K[0, 0]), 4), round(float(K[1, 0]), 4)],
             "rho_t1":  round(rho_t1, 4),
             "rho_t3":  round(rho_t3, 4),
             "pvi":     pvi,
+            "saturation_protocol": self.saturation_protocol,
         }
+
+
+# ─── MIMI KERNEL ──────────────────────────────────────────────────────────────
+class MIMIKernel:
+    LEAKAGE_SEED = 3.94
+    ANNUALIZED_EXPOSURE = 2_810_000
+    K_DECAY = 20
+
+    def __init__(self, df: pd.DataFrame, mu: float = 150.0):
+        self.df = df.copy()
+        self.n_total = len(df)
+        self.mu = mu
+        self.critical_rho = 0.85
+        self.lr_model = None
+        self.hubs: dict = self._init_hubs()
+
+    def _init_hubs(self) -> dict:
+        hubs = {}
+        for name, blocks in HUB_BLOCK_MAP.items():
+            hub_df = self.df[self.df['Warehouse_block'].isin(blocks)]
+            lambda_rate = len(hub_df) / T_OPERATIONAL
+            hubs[name] = HubNode(name, lambda_rate, self.mu)
+        return hubs
+
+    def recalculate_lambdas(self):
+        """Recalculate each hub's λ from current DataFrame distribution."""
+        for name, blocks in HUB_BLOCK_MAP.items():
+            if name in self.hubs:
+                hub_df = self.df[self.df['Warehouse_block'].isin(blocks)]
+                new_lambda = len(hub_df) / T_OPERATIONAL
+                self.hubs[name].check_thundering_herd(new_lambda)
+                self.hubs[name].lambda_rate = new_lambda
+
+    def global_rho(self) -> float:
+        """Aggregate ρ = Σλ / Σμ across all hubs."""
+        total_lambda = sum(h.lambda_rate for h in self.hubs.values())
+        total_mu = sum(h.mu for h in self.hubs.values())
+        return float(np.clip(total_lambda / total_mu, 0.0, 1.5)) if total_mu > 0 else 1.0
+
+    def failure_rate(self) -> float:
+        """Delivery failure rate N_late / N_total (legacy, separate from ρ)."""
+        late = int((self.df['Reached.on.Time_Y.N'] == 0).sum())
+        return round(float(late / self.n_total), 4) if self.n_total > 0 else 0.0
+
+    def update_mu(self, new_mu: float):
+        self.mu = new_mu
+        for hub in self.hubs.values():
+            hub.mu = new_mu
+
+    def phi(self, rho_val: float) -> float:
+        return round(float(1 / (1 + np.exp(-self.K_DECAY * (rho_val - self.critical_rho)))), 4)
+
+    def wq(self, rho_val: float) -> float:
+        if rho_val >= 1.0:
+            return 99.9999
+        return round(float(rho_val / (1 - rho_val)), 4)
 
     def inverse_reliability(self) -> dict:
         df = self.df
@@ -116,21 +187,17 @@ class MIMIKernel:
         n_fail = int(len(fail_df))
         n_high = int((df['Product_importance'].str.lower() == 'high').sum())
         failure_rate = round(float(n_fail / n_high), 4) if n_high > 0 else 0.0
-        top = fail_df.head(25)[[
-            'ID', 'Warehouse_block', 'Mode_of_Shipment',
-            'Cost_of_the_Product', 'Weight_in_gms', 'Discount_offered'
-        ]].copy()
+        top = fail_df.head(25)[['ID', 'Warehouse_block', 'Mode_of_Shipment',
+                                 'Cost_of_the_Product', 'Weight_in_gms', 'Discount_offered']].copy()
         top.columns = ['id', 'hub', 'mode', 'cost', 'weight', 'discount']
         records = [{k: int(v) if isinstance(v, (np.integer, np.int64)) else v
                     for k, v in row.items()} for row in top.to_dict('records')]
         return {
-            "failure_count": n_fail,
-            "total_high": n_high,
-            "failure_rate": failure_rate,
+            "failure_count": n_fail, "total_high": n_high, "failure_rate": failure_rate,
             "leakage_total": round(n_fail * self.LEAKAGE_SEED, 2),
             "clv_loss": round(n_fail * 2.74, 2),
             "recovery_value": round(n_fail * 1.20, 2),
-            "records": records
+            "records": records,
         }
 
     def warehouse_metrics(self) -> list:
@@ -141,10 +208,8 @@ class MIMIKernel:
             if n == 0:
                 continue
             late = int((sub['Reached.on.Time_Y.N'] == 0).sum())
-            results.append({
-                "block": b, "total": int(n), "late": late,
-                "utilization": round(float(late / n), 4), "on_time": int(n - late)
-            })
+            results.append({"block": b, "total": int(n), "late": late,
+                            "utilization": round(float(late / n), 4), "on_time": int(n - late)})
         return results
 
     def mode_metrics(self) -> list:
@@ -155,14 +220,10 @@ class MIMIKernel:
             if n == 0:
                 continue
             late = int((sub['Reached.on.Time_Y.N'] == 0).sum())
-            results.append({
-                "mode": m, "total": int(n), "late": late,
-                "rate": round(float(late / n), 4)
-            })
+            results.append({"mode": m, "total": int(n), "late": late, "rate": round(float(late / n), 4)})
         return results
 
     def average_delay_per_block(self) -> list:
-        """Average delay proxy per block: Customer_care_calls × mode_factor × 8h for late shipments"""
         mode_map = {'Ship': 2.0, 'Flight': 0.5, 'Road': 1.0}
         results = []
         for b in ['A', 'B', 'C', 'D', 'F']:
@@ -181,7 +242,6 @@ class MIMIKernel:
         return results
 
     def red_zone_importance(self) -> list:
-        """Product importance breakdown for Red Zone (blocks with ρ > 0.80) late shipments"""
         red_blocks = [
             b for b in ['A', 'B', 'C', 'D', 'F']
             if (sub := self.df[self.df['Warehouse_block'] == b]) is not None
@@ -198,7 +258,6 @@ class MIMIKernel:
         return [{"name": lvl, "value": int(counts.get(lvl, 0))} for lvl in ['High', 'Medium', 'Low']]
 
     def routing_logic(self, rho_val: float) -> dict:
-        """Autonomous GSC routing: identify overloaded vs available hubs, ε=0.05 safety buffer"""
         wh = self.warehouse_metrics()
         epsilon = 0.05
         threshold = self.critical_rho
@@ -209,7 +268,7 @@ class MIMIKernel:
             "available_blocks": available,
             "diversion_active": len(overloaded) > 0 and len(available) > 0,
             "epsilon": epsilon,
-            "threshold": round(threshold, 4)
+            "threshold": round(threshold, 4),
         }
 
     def fit_lr(self) -> float:
@@ -239,7 +298,8 @@ def _generate_dataset(n: int = 10999, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     return pd.DataFrame({
         'ID': range(1, n + 1),
-        'Warehouse_block': rng.choice(['A', 'B', 'C', 'D', 'F'], n),
+        'Warehouse_block': rng.choice(['A', 'B', 'C', 'D', 'F'], n,
+                                       p=[0.25, 0.20, 0.15, 0.15, 0.25]),
         'Mode_of_Shipment': rng.choice(['Ship', 'Flight', 'Road'], n, p=[0.55, 0.33, 0.12]),
         'Customer_care_calls': rng.integers(1, 8, n).astype(int),
         'Customer_rating': rng.integers(1, 6, n).astype(int),
@@ -249,7 +309,7 @@ def _generate_dataset(n: int = 10999, seed: int = 42) -> pd.DataFrame:
         'Gender': rng.choice(['F', 'M'], n),
         'Discount_offered': rng.integers(0, 66, n).astype(int),
         'Weight_in_gms': rng.integers(1000, 7100, n).astype(int),
-        'Reached.on.Time_Y.N': rng.choice([0, 1], n, p=[0.82, 0.18]).astype(int)
+        'Reached.on.Time_Y.N': rng.choice([0, 1], n, p=[0.82, 0.18]).astype(int),
     })
 
 
@@ -261,115 +321,13 @@ _session: dict = {
     "revenue_saved": 0.0,
     "refresh_count": 0,
     "rho_history": [],
-    "dataset_name": "SAFEXPRESS_CASE_02028317"
+    "dataset_name": "SAFEXPRESS_CASE_02028317",
 }
 
 
-# ─── ROUTES ──────────────────────────────────────────────────────────────────
-
-@api_router.get("/")
-async def root():
-    return {"message": "SITI Intelligence — MIMI Kernel Active"}
-
-
-@api_router.get("/kernel/state")
-async def get_kernel_state():
-    mimi: MIMIKernel = _session["mimi"]
-    if mimi is None:
-        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
-
-    noise = float(np.random.normal(0, 0.008))
-    rho_measured = float(np.clip(mimi.base_rho() + noise, 0.0, 1.0))
-    phi_val = mimi.phi(rho_measured)
-    kalman = mimi.kalman_step(rho_measured)
-    irp = mimi.inverse_reliability()
-
-    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    _session["rho_history"].append({
-        "time": ts,
-        "rho":  round(rho_measured, 4),
-        "t1":   kalman["rho_t1"],
-        "t3":   kalman["rho_t3"],
-    })
-    if len(_session["rho_history"]) > 30:
-        _session["rho_history"].pop(0)
-
-    # Commander's message based on T+3 projection
-    rho_t3 = kalman["rho_t3"]
-    if rho_t3 >= 0.85:
-        commander_msg   = "CRITICAL: HUB SATURATION IMMINENT. INITIATE PREEMPTIVE DIVERSION TO BLOCK B."
-        commander_level = "critical"
-    elif rho_t3 < 0.50:
-        commander_msg   = "EFFICIENCY GAP: HUB UNDER-UTILIZED. ACCELERATE INBOUND INGESTION."
-        commander_level = "efficiency"
-    else:
-        commander_msg   = "MIMI KERNEL: OPTIMAL FLOW DETECTED. CERTAINTY 99.2%."
-        commander_level = "stable"
-
-    return {
-        "rho": round(rho_measured, 4),
-        "rho_base": mimi.base_rho(),
-        "phi": phi_val,
-        "critical_rho": mimi.critical_rho,
-        "k_decay": mimi.K_DECAY,
-        "n_total": mimi.n_total,
-        "kalman": kalman,
-        "rho_t3": kalman["rho_t3"],
-        "pvi": kalman["pvi"],
-        "pvi_alert": kalman["pvi"] > 15.0,
-        "commander_message": commander_msg,
-        "commander_level": commander_level,
-        "inverse_reliability": irp,
-        "warehouse_metrics": mimi.warehouse_metrics(),
-        "mode_metrics": mimi.mode_metrics(),
-        "average_delay": mimi.average_delay_per_block(),
-        "red_zone_importance": mimi.red_zone_importance(),
-        "routing": mimi.routing_logic(rho_measured),
-        "wq": mimi.wq(rho_measured),
-        "catastrophe": rho_measured > 0.80,
-        "collapse": rho_measured >= 0.85,
-        "catastrophe_predicted":    kalman["rho_t1"] > 0.80,
-        "collapse_predicted":       kalman["rho_t1"] >= 0.85,
-        "catastrophe_predicted_t3": kalman["rho_t3"] > 0.80,
-        "collapse_predicted_t3":    kalman["rho_t3"] >= 0.85,
-        "rho_history": _session["rho_history"][-30:],
-        "annualized_exposure": mimi.ANNUALIZED_EXPOSURE,
-        "leakage_seed": mimi.LEAKAGE_SEED,
-        "diverted_units": _session["diverted_units"],
-        "revenue_saved": round(_session["revenue_saved"], 2),
-        "refresh_count": _session["refresh_count"],
-        "dataset_name": _session["dataset_name"]
-    }
-
-
-@api_router.post("/kernel/tick")
-async def kernel_tick():
-    mimi: MIMIKernel = _session["mimi"]
-    if mimi is None:
-        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
-
-    rho_base = mimi.base_rho()
-    if rho_base > 0.80:
-        diverted = random.randint(12, 28)
-    elif rho_base > 0.75:
-        diverted = random.randint(6, 15)
-    else:
-        diverted = random.randint(2, 8)
-
-    _session["diverted_units"] += diverted
-    _session["revenue_saved"] = _session["diverted_units"] * mimi.LEAKAGE_SEED
-    _session["refresh_count"] += 1
-
-    return {
-        "diverted": diverted,
-        "total_diverted": _session["diverted_units"],
-        "revenue_saved": round(_session["revenue_saved"], 2),
-        "refresh_count": _session["refresh_count"]
-    }
-
+# ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 def _sanitize_numeric(val):
-    """Strip non-numeric characters from messy values like '100kg', '$5.00', '3,500'."""
     if isinstance(val, str):
         cleaned = re.sub(r'[^\d.]', '', val.strip())
         try:
@@ -380,7 +338,6 @@ def _sanitize_numeric(val):
 
 
 def _sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Apply regex sanitizer to all numeric feature columns."""
     num_cols = ['Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
                 'Prior_purchases', 'Discount_offered', 'Weight_in_gms']
     for col in num_cols:
@@ -389,49 +346,41 @@ def _sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _parse_csv_resilient(content: bytes) -> pd.DataFrame:
-    """
-    Multi-stage CSV decoder with fail-safe bad-row skipping.
-    Stage 1: UTF-8 decode  → strip non-ASCII smart characters → parse
-    Stage 2: ISO-8859-1 fallback  (catches 0xe2 'smart quote' bytes)
-    Stage 3: Windows-1252 last resort
-    Rows with invalid bytes are skipped with a WARNING — no crash.
-    """
-    _strip = lambda t: re.sub(r'[^\x20-\x7E\t\n\r]', '', t)
+def _strip_non_ascii(t):
+    return re.sub(r'[^\x20-\x7E\t\n\r]', '', t)
 
+
+def _parse_csv_resilient(content: bytes) -> pd.DataFrame:
     for encoding in ('utf-8', 'iso-8859-1', 'windows-1252'):
         try:
             text = content.decode(encoding, errors='replace')
-            # UTF-8 with replacement chars → silently try next encoding
             if encoding == 'utf-8' and '\uFFFD' in text:
-                logger.warning("UTF-8: replacement chars found (likely ISO-8859-1 file), retrying")
+                logger.warning("UTF-8: replacement chars found, retrying next encoding")
                 continue
-            text = _strip(text)
+            text = _strip_non_ascii(text)
             df = pd.read_csv(io.StringIO(text), on_bad_lines='skip')
             logger.info(f"CSV parsed OK: encoding={encoding}, rows={len(df)}, cols={list(df.columns)}")
             return df
         except UnicodeDecodeError:
-            logger.warning(f"Decode failed with {encoding}, trying next encoding")
+            logger.warning(f"Decode failed with {encoding}, trying next")
         except Exception as exc:
             logger.warning(f"CSV parse error ({encoding}): {exc}")
-
-    raise ValueError("CSV unreadable with UTF-8, ISO-8859-1, or Windows-1252 — please check the file")
+    raise ValueError("CSV unreadable with UTF-8, ISO-8859-1, or Windows-1252")
 
 
 def _fuzzy_map_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Fuzzy column mapper — String.includes()-style matching on messy headers."""
     TARGET_MAP = [
-        ('Reached.on.Time_Y.N',  lambda l: ('reached' in l) or ('on_time' in l) or ('ontime' in l) or ('delivered' in l) or ('on_time_y' in l)),
-        ('Warehouse_block',       lambda l: ('warehouse' in l) or ('wh_block' in l) or ('block' in l and 'hub' not in l)),
-        ('Mode_of_Shipment',      lambda l: ('mode' in l) or ('shipment' in l) or ('transport' in l) or ('carrier' in l)),
-        ('Customer_care_calls',   lambda l: ('care' in l and 'call' in l) or ('cc_call' in l) or ('support_call' in l)),
-        ('Customer_rating',       lambda l: ('rating' in l) or ('score' in l and 'customer' in l) or ('csat' in l)),
-        ('Cost_of_the_Product',   lambda l: ('cost' in l) or ('price' in l) or ('product_cost' in l) or ('amount' in l)),
-        ('Prior_purchases',       lambda l: ('prior' in l) or ('purchase' in l) or ('prev_buy' in l) or ('history' in l)),
-        ('Product_importance',    lambda l: ('importance' in l) or ('priority' in l) or ('prod_imp' in l) or ('tier' in l)),
-        ('Gender',                lambda l: l in ('gender', 'sex', 'g')),
-        ('Discount_offered',      lambda l: ('discount' in l) or ('promo' in l) or ('rebate' in l)),
-        ('Weight_in_gms',         lambda l: ('weight' in l) or ('wt' in l) or ('mass' in l) or ('gms' in l) or ('gram' in l)),
+        ('Reached.on.Time_Y.N', lambda c: ('reached' in c) or ('on_time' in c) or ('ontime' in c) or ('delivered' in c) or ('on_time_y' in c)),
+        ('Warehouse_block',     lambda c: ('warehouse' in c) or ('wh_block' in c) or ('block' in c and 'hub' not in c)),
+        ('Mode_of_Shipment',    lambda c: ('mode' in c) or ('shipment' in c) or ('transport' in c) or ('carrier' in c)),
+        ('Customer_care_calls', lambda c: ('care' in c and 'call' in c) or ('cc_call' in c) or ('support_call' in c)),
+        ('Customer_rating',     lambda c: ('rating' in c) or ('score' in c and 'customer' in c) or ('csat' in c)),
+        ('Cost_of_the_Product', lambda c: ('cost' in c) or ('price' in c) or ('product_cost' in c) or ('amount' in c)),
+        ('Prior_purchases',     lambda c: ('prior' in c) or ('purchase' in c) or ('prev_buy' in c) or ('history' in c)),
+        ('Product_importance',  lambda c: ('importance' in c) or ('priority' in c) or ('prod_imp' in c) or ('tier' in c)),
+        ('Gender',              lambda c: c in ('gender', 'sex', 'g')),
+        ('Discount_offered',    lambda c: ('discount' in c) or ('promo' in c) or ('rebate' in c)),
+        ('Weight_in_gms',       lambda c: ('weight' in c) or ('wt' in c) or ('mass' in c) or ('gms' in c) or ('gram' in c)),
     ]
     col_map = {}
     already_mapped = set()
@@ -446,7 +395,6 @@ def _fuzzy_map_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fill_missing_with_means(df: pd.DataFrame) -> pd.DataFrame:
-    """Fill missing / NaN numeric values with column means; categoricals with mode."""
     num_cols = ['Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
                 'Prior_purchases', 'Discount_offered', 'Weight_in_gms']
     for col in num_cols:
@@ -463,17 +411,220 @@ def _fill_missing_with_means(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _compute_cascade(hubs: dict) -> tuple:
+    """Compute cascade diversion on copies of λ — does NOT mutate hub state."""
+    effective = {name: h.lambda_rate for name, h in hubs.items()}
+    events = []
+    for name in sorted(effective.keys(), key=lambda n: effective[n] / hubs[n].mu, reverse=True):
+        hub = hubs[name]
+        rho = effective[name] / hub.mu if hub.mu > 0 else 99.0
+        if rho > 0.85:
+            excess = (rho - 0.85) * hub.mu
+            others = [(n, effective[n] / hubs[n].mu) for n in effective if n != name]
+            if not others:
+                continue
+            receiver_name = min(others, key=lambda x: x[1])[0]
+            effective[name] -= excess
+            effective[receiver_name] += excess
+            events.append({
+                "from_hub": name,
+                "to_hub": receiver_name,
+                "excess_lambda": round(excess, 2),
+                "new_rho_source": round(effective[name] / hub.mu, 4),
+                "new_rho_receiver": round(effective[receiver_name] / hubs[receiver_name].mu, 4),
+            })
+    return effective, events
+
+
+# ─── ROUTES ───────────────────────────────────────────────────────────────────
+
+@api_router.get("/")
+async def root():
+    return {"message": "SITI Intelligence — MIMI Kernel v2.0 (3-Hub Network)"}
+
+
+@api_router.get("/kernel/state")
+async def get_kernel_state():
+    mimi: MIMIKernel = _session["mimi"]
+    if mimi is None:
+        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
+
+    # ── Cascade: compute effective λ per hub ──
+    effective_lambdas, cascade_events = _compute_cascade(mimi.hubs)
+
+    # ── Per-hub state ──
+    hub_states = []
+    for name in ["Alpha", "Beta", "Gamma"]:
+        hub = mimi.hubs[name]
+        eff_lambda = effective_lambdas[name]
+        eff_rho = float(np.clip(eff_lambda / hub.mu, 0.0, 1.5)) if hub.mu > 0 else 1.0
+        noise = float(np.random.normal(0, 0.008))
+        rho_measured = float(np.clip(eff_rho + noise, 0.0, 1.5))
+
+        kalman = hub.kalman_step_2d(rho_measured)
+
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        hub.rho_history.append({"time": ts, "rho": round(rho_measured, 4),
+                                 "t1": kalman["rho_t1"], "t3": kalman["rho_t3"]})
+        if len(hub.rho_history) > 30:
+            hub.rho_history.pop(0)
+
+        is_receiver = any(e["to_hub"] == name for e in cascade_events)
+        is_source = any(e["from_hub"] == name for e in cascade_events)
+
+        hub_states.append({
+            "name": name,
+            "blocks": HUB_BLOCK_MAP[name],
+            "lambda_rate": round(hub.lambda_rate, 2),
+            "effective_lambda": round(eff_lambda, 2),
+            "mu": round(hub.mu, 2),
+            "rho": round(rho_measured, 4),
+            "rho_exact": round(eff_rho, 4),
+            "kalman": kalman,
+            "rho_history": hub.rho_history[-30:],
+            "cascade_risk": is_receiver,
+            "cascade_source": is_source,
+            "saturation_protocol": hub.saturation_protocol,
+        })
+
+    # ── Global aggregate ──
+    total_eff = sum(effective_lambdas.values())
+    total_mu = sum(h.mu for h in mimi.hubs.values())
+    global_rho_val = float(np.clip(total_eff / total_mu, 0.0, 1.5)) if total_mu > 0 else 1.0
+    noise_g = float(np.random.normal(0, 0.005))
+    global_rho_measured = float(np.clip(global_rho_val + noise_g, 0.0, 1.5))
+
+    phi_val = mimi.phi(global_rho_measured)
+    irp = mimi.inverse_reliability()
+
+    # ── Global Kalman (pick Alpha hub's kalman as representative, or compute aggregate) ──
+    alpha_k = hub_states[0]["kalman"] if hub_states else {}
+
+    # ── Global rho history ──
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    _session["rho_history"].append({
+        "time": ts,
+        "rho":  round(global_rho_measured, 4),
+        "t1":   alpha_k.get("rho_t1", 0),
+        "t3":   alpha_k.get("rho_t3", 0),
+    })
+    if len(_session["rho_history"]) > 30:
+        _session["rho_history"].pop(0)
+
+    # ── Commander's message — based on most critical hub ──
+    critical_hub = max(hub_states, key=lambda h: h["rho"])
+    rho_t3_max = critical_hub["kalman"]["rho_t3"]
+
+    if cascade_events:
+        ev = cascade_events[0]
+        commander_msg = f"CASCADE DIVERSION ACTIVE: {ev['from_hub']} -> {ev['to_hub']} ({ev['excess_lambda']:.1f} units/hr).\nMONITOR {ev['to_hub']} FOR SECONDARY STRAIN."
+        commander_level = "critical"
+    elif rho_t3_max >= 0.85:
+        commander_msg = f"CRITICAL: HUB {critical_hub['name'].upper()} SATURATION IMMINENT.\nINITIATE PREEMPTIVE DIVERSION PROTOCOL."
+        commander_level = "critical"
+    elif rho_t3_max < 0.40:
+        commander_msg = "EFFICIENCY GAP: NETWORK UNDER-UTILIZED.\nACCELERATE INBOUND INGESTION."
+        commander_level = "efficiency"
+    else:
+        commander_msg = "MIMI KERNEL: OPTIMAL NETWORK FLOW DETECTED.\nCERTAINTY 99.2%."
+        commander_level = "stable"
+
+    # Any saturation protocol active?
+    any_saturation = any(h["saturation_protocol"] for h in hub_states)
+    if any_saturation:
+        sat_hub = next(h for h in hub_states if h["saturation_protocol"])
+        commander_msg = f"THUNDERING HERD DETECTED AT HUB {sat_hub['name'].upper()}.\nIMMEDIATE SATURATION PROTOCOL ENGAGED."
+        commander_level = "critical"
+
+    catastrophe = global_rho_measured > 0.80
+    collapse = global_rho_measured >= 0.85
+
+    return {
+        # Global
+        "rho": round(global_rho_measured, 4),
+        "global_rho": round(global_rho_measured, 4),
+        "mu": round(mimi.mu, 2),
+        "total_lambda": round(total_eff, 2),
+        "phi": phi_val,
+        "critical_rho": mimi.critical_rho,
+        "k_decay": mimi.K_DECAY,
+        "n_total": mimi.n_total,
+        "failure_rate": mimi.failure_rate(),
+        "wq": mimi.wq(global_rho_measured),
+
+        # Hub network
+        "hubs": hub_states,
+        "cascade_events": cascade_events,
+
+        # Global Kalman (using Alpha as proxy)
+        "kalman": alpha_k,
+        "rho_t3": rho_t3_max,
+        "pvi": alpha_k.get("pvi", 0),
+        "pvi_alert": alpha_k.get("pvi", 0) > 15.0,
+
+        # Commander
+        "commander_message": commander_msg,
+        "commander_level": commander_level,
+
+        # Shared analytics
+        "inverse_reliability": irp,
+        "warehouse_metrics": mimi.warehouse_metrics(),
+        "mode_metrics": mimi.mode_metrics(),
+        "average_delay": mimi.average_delay_per_block(),
+        "red_zone_importance": mimi.red_zone_importance(),
+        "routing": mimi.routing_logic(global_rho_measured),
+
+        # Flags
+        "catastrophe": catastrophe,
+        "collapse": collapse,
+        "catastrophe_predicted": rho_t3_max > 0.80,
+        "collapse_predicted": rho_t3_max >= 0.85,
+
+        # Session
+        "rho_history": _session["rho_history"][-30:],
+        "annualized_exposure": mimi.ANNUALIZED_EXPOSURE,
+        "leakage_seed": mimi.LEAKAGE_SEED,
+        "diverted_units": _session["diverted_units"],
+        "revenue_saved": round(_session["revenue_saved"], 2),
+        "refresh_count": _session["refresh_count"],
+        "dataset_name": _session["dataset_name"],
+    }
+
+
+@api_router.post("/kernel/tick")
+async def kernel_tick():
+    mimi: MIMIKernel = _session["mimi"]
+    if mimi is None:
+        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
+
+    g_rho = mimi.global_rho()
+    if g_rho > 0.80:
+        diverted = random.randint(12, 28)
+    elif g_rho > 0.75:
+        diverted = random.randint(6, 15)
+    else:
+        diverted = random.randint(2, 8)
+
+    _session["diverted_units"] += diverted
+    _session["revenue_saved"] = _session["diverted_units"] * mimi.LEAKAGE_SEED
+    _session["refresh_count"] += 1
+
+    return {
+        "diverted": diverted,
+        "total_diverted": _session["diverted_units"],
+        "revenue_saved": round(_session["revenue_saved"], 2),
+        "refresh_count": _session["refresh_count"],
+    }
+
+
 @api_router.post("/kernel/upload")
 async def upload_dataset(file: UploadFile = File(...)):
     try:
         content = await file.read()
-        df = _parse_csv_resilient(content)   # encoding-resilient multi-stage decoder
-
-        # Fuzzy column mapping
+        df = _parse_csv_resilient(content)
         df = _fuzzy_map_columns(df)
 
         if 'Reached.on.Time_Y.N' not in df.columns:
-            # Build fuzzy suggestion for the missing column
             suggestions = {}
             for col in df.columns:
                 lower_col = col.lower().replace(' ', '_').replace('.', '_').replace('-', '_')
@@ -483,18 +634,14 @@ async def upload_dataset(file: UploadFile = File(...)):
                         break
                 if 'Reached.on.Time_Y.N' in suggestions:
                     break
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "type": "SCHEMA_MISMATCH",
-                    "found_columns": list(df.columns),
-                    "required_unmapped": ["Reached.on.Time_Y.N"],
-                    "fuzzy_suggestions": suggestions,
-                    "message": "SCHEMA MISMATCH: PLEASE MAP [Reached.on.Time_Y.N] TO SITI STANDARDS",
-                }
-            )
+            raise HTTPException(status_code=400, detail={
+                "type": "SCHEMA_MISMATCH",
+                "found_columns": list(df.columns),
+                "required_unmapped": ["Reached.on.Time_Y.N"],
+                "fuzzy_suggestions": suggestions,
+                "message": "SCHEMA MISMATCH: PLEASE MAP [Reached.on.Time_Y.N] TO SITI STANDARDS",
+            })
 
-        # Normalise on-time column to 0/1
         col = df['Reached.on.Time_Y.N']
         if col.dtype == object:
             df['Reached.on.Time_Y.N'] = col.map(
@@ -510,12 +657,10 @@ async def upload_dataset(file: UploadFile = File(...)):
             if cat_col not in df.columns:
                 df[cat_col] = default
 
-        # Regex-sanitize messy numeric fields ('100kg' → 100, '$5.00' → 5)
         df = _sanitize_numeric_columns(df)
-        # Fill missing numeric values with column means
         df = _fill_missing_with_means(df)
 
-        new_kernel = MIMIKernel(df)
+        new_kernel = MIMIKernel(df, _session.get("mu", 150.0))
         new_critical_rho = new_kernel.fit_lr()
 
         _session["mimi"] = new_kernel
@@ -525,13 +670,14 @@ async def upload_dataset(file: UploadFile = File(...)):
         _session["rho_history"] = []
         _session["dataset_name"] = file.filename or "UPLOADED_DATASET"
 
+        g_rho = new_kernel.global_rho()
         return {
             "success": True,
             "n_total": len(df),
-            "new_rho": new_kernel.base_rho(),
+            "new_rho": round(g_rho, 4),
             "new_critical_rho": new_critical_rho,
-            "message": f"MIMI Kernel reinitialized. ρ={new_kernel.base_rho():.4f}, ρ_c={new_critical_rho:.4f}",
-            "dataset_name": _session["dataset_name"]
+            "message": f"MIMI Kernel reinitialized. Global ρ={g_rho:.4f}, ρ_c={new_critical_rho:.4f}",
+            "dataset_name": _session["dataset_name"],
         }
     except HTTPException:
         raise
@@ -542,37 +688,36 @@ async def upload_dataset(file: UploadFile = File(...)):
 
 @api_router.post("/kernel/stream-batch")
 async def stream_batch(n: int = 100):
-    """Inject n virtual shipment units based on current kernel ρ distribution — Live Telemetry mode."""
     mimi: MIMIKernel = _session["mimi"]
     if mimi is None:
         raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
 
     rng = np.random.default_rng()
-    rho_base = mimi.base_rho()
-    # Late probability fluctuates around current ρ with small Gaussian noise
+    rho_base = mimi.failure_rate()
     late_prob = float(np.clip(rho_base + rng.normal(0, 0.018), 0.55, 0.98))
 
     new_rows = pd.DataFrame({
-        'ID':                 range(mimi.n_total + 1, mimi.n_total + n + 1),
-        'Warehouse_block':    rng.choice(['A', 'B', 'C', 'D', 'F'], n),
-        'Mode_of_Shipment':   rng.choice(['Ship', 'Flight', 'Road'], n, p=[0.55, 0.33, 0.12]),
+        'ID':                  range(mimi.n_total + 1, mimi.n_total + n + 1),
+        'Warehouse_block':     rng.choice(['A', 'B', 'C', 'D', 'F'], n,
+                                           p=[0.25, 0.20, 0.15, 0.15, 0.25]),
+        'Mode_of_Shipment':    rng.choice(['Ship', 'Flight', 'Road'], n, p=[0.55, 0.33, 0.12]),
         'Customer_care_calls': rng.integers(1, 8, n).astype(int),
-        'Customer_rating':    rng.integers(1, 6, n).astype(int),
+        'Customer_rating':     rng.integers(1, 6, n).astype(int),
         'Cost_of_the_Product': rng.integers(96, 310, n).astype(int),
-        'Prior_purchases':    rng.integers(2, 8, n).astype(int),
-        'Product_importance': rng.choice(['Low', 'Medium', 'High'], n, p=[0.60, 0.25, 0.15]),
-        'Gender':             rng.choice(['F', 'M'], n),
-        'Discount_offered':   rng.integers(0, 66, n).astype(int),
-        'Weight_in_gms':      rng.integers(1000, 7100, n).astype(int),
+        'Prior_purchases':     rng.integers(2, 8, n).astype(int),
+        'Product_importance':  rng.choice(['Low', 'Medium', 'High'], n, p=[0.60, 0.25, 0.15]),
+        'Gender':              rng.choice(['F', 'M'], n),
+        'Discount_offered':    rng.integers(0, 66, n).astype(int),
+        'Weight_in_gms':       rng.integers(1000, 7100, n).astype(int),
         'Reached.on.Time_Y.N': rng.choice([0, 1], n, p=[late_prob, 1.0 - late_prob]).astype(int),
     })
 
     mimi.df = pd.concat([mimi.df, new_rows], ignore_index=True)
     mimi.n_total = len(mimi.df)
-    mimi._kx = None   # reset Kalman so it re-estimates from fresh data
+    mimi.recalculate_lambdas()
 
-    new_rho = mimi.base_rho()
-    diverted = int(n * late_prob * 0.25)
+    new_rho = mimi.global_rho()
+    diverted = int(n * new_rho * 0.25)
     _session["diverted_units"] += diverted
     _session["revenue_saved"] = _session["diverted_units"] * mimi.LEAKAGE_SEED
     _session["refresh_count"] += 1
@@ -585,6 +730,101 @@ async def stream_batch(n: int = 100):
         "diverted": diverted,
         "total_diverted": _session["diverted_units"],
         "revenue_saved": round(_session["revenue_saved"], 2),
+    }
+
+
+# ─── SERVICE CAPACITY CONTROL ────────────────────────────────────────────────
+
+class MuUpdate(BaseModel):
+    mu: float
+
+@api_router.post("/kernel/set-mu")
+async def set_mu(data: MuUpdate):
+    mimi: MIMIKernel = _session["mimi"]
+    if mimi is None:
+        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
+    if data.mu < 10 or data.mu > 1000:
+        raise HTTPException(status_code=400, detail="μ must be between 10 and 1000")
+    mimi.update_mu(data.mu)
+    _session["mu"] = data.mu
+    return {"success": True, "mu": data.mu, "new_global_rho": round(mimi.global_rho(), 4)}
+
+
+# ─── ENTERPRISE INTEGRATION API ──────────────────────────────────────────────
+
+@api_router.post("/v1/intercept")
+async def intercept_endpoint(payload: dict = {}):
+    """Enterprise interception endpoint for SAP/Oracle ERP integration."""
+    mimi: MIMIKernel = _session["mimi"]
+    if mimi is None:
+        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
+
+    g_rho = mimi.global_rho()
+    effective, cascade = _compute_cascade(mimi.hubs)
+
+    hub_summary = []
+    for name in ["Alpha", "Beta", "Gamma"]:
+        hub = mimi.hubs[name]
+        eff_rho = effective[name] / hub.mu if hub.mu > 0 else 1.0
+        hub_summary.append({
+            "name": name, "rho": round(eff_rho, 4),
+            "lambda": round(effective[name], 2), "mu": round(hub.mu, 2),
+        })
+
+    return {
+        "status": "collapse" if g_rho >= 0.85 else "critical" if g_rho > 0.80 else "nominal",
+        "network": {
+            "global_rho": round(g_rho, 4),
+            "hubs": hub_summary,
+            "cascade_events": cascade,
+            "total_lambda": round(sum(effective.values()), 2),
+            "total_mu": round(sum(h.mu for h in mimi.hubs.values()), 2),
+        },
+        "prediction": {
+            "rho_t3": round(max(h.kalman_step_2d(h.rho)["rho_t3"] for h in mimi.hubs.values()), 4) if mimi.hubs else 0,
+        },
+        "recommended_action": "DIVERT" if g_rho > 0.85 else "MONITOR" if g_rho > 0.75 else "NOMINAL",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@api_router.get("/v1/intercept/schema")
+async def intercept_schema():
+    """Return JSON schema for the /api/v1/intercept endpoint."""
+    return {
+        "endpoint": "/api/v1/intercept",
+        "method": "POST",
+        "description": "Real-time interception endpoint for SAP/Oracle ERP integration. Submit shipment data for MIMI Kernel predictive analysis.",
+        "request_schema": {
+            "shipments": [
+                {
+                    "id": "string",
+                    "warehouse_block": "A|B|C|D|F",
+                    "mode_of_shipment": "Ship|Flight|Road",
+                    "weight_gms": "number",
+                    "cost": "number",
+                    "product_importance": "Low|Medium|High",
+                    "customer_care_calls": "number (1-7)",
+                }
+            ],
+            "config": {
+                "mu": "number (service capacity units/hr, default: 150)",
+                "threshold": "number (critical ρ threshold, default: 0.85)",
+            },
+        },
+        "response_schema": {
+            "status": "nominal|critical|collapse",
+            "network": {
+                "global_rho": "number (0-1.5)",
+                "hubs": [{"name": "string", "rho": "number", "lambda": "number", "mu": "number"}],
+                "cascade_events": [{"from_hub": "string", "to_hub": "string", "excess_lambda": "number"}],
+            },
+            "prediction": {"rho_t3": "number (135-min forecast)"},
+            "recommended_action": "NOMINAL|MONITOR|DIVERT",
+            "timestamp": "ISO 8601",
+        },
+        "authentication": "Bearer token (contact SITI ops for enterprise key)",
+        "rate_limit": "1000 req/min (enterprise tier)",
     }
 
 
@@ -606,8 +846,10 @@ async def init_kernel():
     import asyncio
     df = _generate_dataset()
     _session["mimi"] = MIMIKernel(df)
-    logger.info(f"MIMI Kernel initialized: n={len(df)}, ρ={_session['mimi'].base_rho():.4f}")
-    # Fit LR in background (non-blocking)
+    _session["mu"] = 150.0
+    logger.info(f"MIMI Kernel v2.0 initialized: n={len(df)}, Global ρ={_session['mimi'].global_rho():.4f}")
+    for name, hub in _session["mimi"].hubs.items():
+        logger.info(f"  Hub {name}: λ={hub.lambda_rate:.1f}/hr, μ={hub.mu:.0f}/hr, ρ={hub.rho:.4f}")
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _session["mimi"].fit_lr)
     logger.info(f"LR fitted: ρ_c={_session['mimi'].critical_rho:.4f}")

@@ -14,7 +14,7 @@ Build "SITI Intelligence," a SaaS Web Dashboard for predictive logistics recover
 - **Frontend**: React 19 + Tailwind CSS + Recharts + KaTeX + react-fast-marquee
 - **Backend**: FastAPI + scikit-learn + NumPy/Pandas (in-memory MIMI Kernel)
 - **Database**: MongoDB (minimal use, kernel state is in-memory)
-- **URL**: https://siti-logistics-hub.preview.emergentagent.com
+- **URL**: https://mimi-kernel-hub.preview.emergentagent.com
 
 ## User Personas
 - C-suite executives reviewing forensic audit reports

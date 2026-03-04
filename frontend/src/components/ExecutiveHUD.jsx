@@ -30,17 +30,17 @@ export default function ExecutiveHUD({ kState, ticker, catastrophe, isStreaming,
   const statusColor = rho > 0.85 ? '#FF3B30' : rho > 0.80 ? '#FF9F0A' : rho > 0.75 ? '#FFB340' : '#32D74B';
 
   const tickerItems = [
-    { label: 'ρ', value: kState?.rho?.toFixed(4) ?? '---', color: catastrophe ? '#FF3B30' : '#FFB340' },
+    { label: 'ρ (λ/μ)', value: kState?.global_rho?.toFixed(4) ?? '---', color: catastrophe ? '#FF3B30' : '#FFB340' },
     { label: 'Φ(ρ)', value: kState?.phi?.toFixed(4) ?? '---', color: '#64D2FF' },
-    { label: 'T+1', value: kState?.kalman?.rho_t1?.toFixed(4) ?? '---', color: kState?.catastrophe_predicted ? '#FF3B30' : '#32D74B' },
+    { label: 'T+3', value: kState?.kalman?.rho_t3?.toFixed(4) ?? '---', color: kState?.collapse_predicted ? '#FF3B30' : '#32D74B' },
+    { label: 'ρ_DOT', value: kState?.kalman?.rho_dot?.toFixed(6) ?? '---', color: (kState?.kalman?.rho_dot ?? 0) > 0 ? '#FF9F0A' : '#64D2FF' },
     { label: 'W_q', value: kState?.wq?.toFixed(3) ?? '---', color: '#64D2FF' },
+    { label: 'λ_TOTAL', value: `${kState?.total_lambda?.toFixed(1) ?? '---'}/hr`, color: '#64D2FF' },
+    { label: 'μ/HUB', value: `${kState?.mu?.toFixed(0) ?? '150'}/hr`, color: '#32D74B' },
     { label: 'FAILURES', value: kState?.inverse_reliability?.failure_count?.toLocaleString() ?? '---', color: '#FF9F0A' },
-    { label: 'LEAKAGE', value: `$${kState?.inverse_reliability?.leakage_total?.toLocaleString('en-US', { minimumFractionDigits: 2 }) ?? '0.00'}`, color: '#FF3B30' },
     { label: 'SAVED', value: `$${ticker?.revenue_saved?.toLocaleString('en-US', { minimumFractionDigits: 2 }) ?? '0.00'}`, color: '#32D74B' },
-    { label: 'DIVERTED', value: `${ticker?.total_diverted?.toLocaleString() ?? 0} UNITS`, color: '#FFB340' },
-    { label: 'RECORDS', value: kState?.n_total?.toLocaleString() ?? '---', color: '#A1A1AA' },
     { label: 'EXPOSURE', value: '$2.81M', color: '#FF3B30' },
-    { label: 'DATASET', value: kState?.dataset_name ?? 'LOADING', color: '#A1A1AA' },
+    { label: 'RECORDS', value: kState?.n_total?.toLocaleString() ?? '---', color: '#A1A1AA' },
     { label: 'ρ_CRITICAL', value: kState?.critical_rho?.toFixed(4) ?? '0.8500', color: '#FF9F0A' },
   ];
 
