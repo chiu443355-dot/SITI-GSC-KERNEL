@@ -56,7 +56,15 @@ Build "SITI Intelligence," a SaaS Web Dashboard for predictive logistics recover
 - Two-level catastrophe alert (ρ>0.80 and ρ≥0.85)
 - Recharts: Average Delay per Warehouse Block + Red Zone Importance charts
 
-### v3.0 (Mar 04, 2026 — Enterprise Pitch Overhaul)
+### v4.0 (Mar 04, 2026 — Enterprise Finalization)
+- **Universal Data Intake**: `_parse_csv_resilient()` — UTF-8 → ISO-8859-1 → Windows-1252 cascade with `on_bad_lines='skip'`; non-ASCII smart chars stripped via regex `[^\x20-\x7E\t\n\r]`
+- **Frontend Decoder**: `readFileResilient()` ArrayBuffer + TextDecoder — detects U+FFFD (UTF-8 failure) and retries ISO-8859-1; `sanitizeText()` applied before column mapping
+- **T+3 Kalman A³**: MIMIKernel estimates state-space A from recent ρ trend (bounded [0.97, 1.06]); T+3=A³×x̂; pvi=|ρ₀-ρ_T3|×100%
+- **PVI Alert**: `pvi_alert` boolean at root of kernel_state; banner pulses amber when PVI>15%
+- **Commander's Message Console**: 3-state widget (critical/stable/efficiency) using rho_t3 threshold; T+3 ρ + PVI readout
+- **rho_history**: each entry now includes `t3` field alongside `rho` and `t1`
+- **Area chart**: neon green line now uses `t3_pct` (not t1_pct) labelled "T+3 KALMAN A³"
+- **Revenue counter**: verified real-time increment during Ghost Mode (100% tested)
 - **Chart Sizing**: All 3 Recharts containers raised to 450px height (bar, pie, area)
 - **HIGH CONTRAST DARK tooltips**: All tooltips now use white background (#FFFFFF) + black text (#000000)
 - **Neon Green Kalman Line**: T+1 Kalman Projection is now `stroke="#39FF14"` dashed `strokeDasharray="10 5"`
