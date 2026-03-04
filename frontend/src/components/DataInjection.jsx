@@ -3,6 +3,18 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import axios from "axios";
 
+/* ── Multi-stage encoding decoder + non-ASCII sanitizer ──── */
+const readFileResilient = async (file) => {
+  const buffer = await file.arrayBuffer();
+  const utf8 = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
+  if (utf8.includes("\uFFFD")) {
+    console.warn("[SITI Pre-Processor] UTF-8 replacement chars detected → retrying ISO-8859-1");
+    return new TextDecoder("iso-8859-1").decode(buffer);
+  }
+  return utf8;
+};
+const sanitizeText = (t) => t.replace(/[^\x20-\x7E\t\n\r]/g, "");
+
 /* ══════════════════════════════════════════════════════════
    CLIENT-SIDE PRE-PROCESSOR — fuzzy header mapping dictionary
    Runs BEFORE the file is sent to the backend.
@@ -156,10 +168,14 @@ export default function DataInjection({
     setUploadError(null);
     setSchemaError(null);
     try {
-      const text       = await file.text();
-      const remapped   = preprocessCSV(text, overrides);
-      const blob       = new Blob([remapped], { type: "text/csv" });
-      const processed  = new File([blob], file.name, { type: "text/csv" });
+      // 1. Multi-stage decode (UTF-8 → ISO-8859-1 fallback)
+      const rawText   = await readFileResilient(file);
+      // 2. Strip non-ASCII smart characters (smart quotes, em-dash, 0xe2 bytes…)
+      const cleanText = sanitizeText(rawText);
+      // 3. Client-side fuzzy header remapping + manual overrides
+      const remapped  = preprocessCSV(cleanText, overrides);
+      const blob      = new Blob([remapped], { type: "text/csv" });
+      const processed = new File([blob], file.name, { type: "text/csv" });
       const fd = new FormData();
       fd.append("file", processed);
 

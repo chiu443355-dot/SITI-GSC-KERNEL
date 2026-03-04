@@ -1,0 +1,77 @@
+{
+  "summary": "Iteration 4 testing: T+3 Kalman A³, PVI fields, Commander Console, ISO-8859-1 encoding resilience, on_bad_lines skip, rho_history t3 field, area chart T+3 legend, ghost trigger revenue counter. 25/25 backend tests passed. All 18 frontend checks passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "component": "FailureTable.jsx",
+        "issue": "React hydration warning: <span> cannot be child of <tbody>, <tr> cannot be child of <span>. Functional, no crash, but produces HTML structure warnings.",
+        "priority": "LOW"
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_siti_iteration4.py",
+    "/app/test_reports/pytest/pytest_results_iter4.xml"
+  ],
+  "action_items": [
+    "Optional: Fix FailureTable.jsx table row rendering to avoid React hydration warning (span as tbody child)"
+  ],
+  "critical_code_review_comments": [
+    "server.py: kalman_step() correctly implements A³ state-space: A=clip(1+avg_drift/z, 0.97, 1.06), rho_t3=clip(x̂×A³, 0,1), pvi=|z-rho_t3|×100 — all correct",
+    "server.py: _parse_csv_resilient() correctly implements UTF-8→ISO-8859-1→Windows-1252 fallback + on_bad_lines='skip' — all correct",
+    "server.py: rho_history entries include 't3': kalman['rho_t3'] — correct",
+    "Dashboard.jsx: CommanderConsole component correctly uses kState.kalman.rho_t3 for logic and display",
+    "HubCharts.jsx: t3_pct = (h.t3 ?? h.t1) * 100 fallback correctly handles old history entries without t3",
+    "DataInjection.jsx: readFileResilient() + sanitizeText() correctly at top of file, called in doUpload()",
+    "Note: Backend tests left test_corrupt_rows.csv as active dataset (n=270 initially). Ghost trigger inflated n_total to 3070 during testing. Frontend commander console correctly showed all 3 states during test run."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_siti_iteration4.py"
+  ],
+  "verified_features": {
+    "backend_encoding_iso8859_resilience": "PASS — ISO-8859-1 file with 0xe2 byte processed without UnicodeDecodeError (status=200)",
+    "backend_on_bad_lines_skip": "PASS — CSV with extra columns in some rows returns 200, success=True",
+    "kalman_rho_t3": "PASS — kalman dict has rho_t3 (float in [0,1])",
+    "kalman_pvi": "PASS — kalman dict has pvi (non-negative float)",
+    "kalman_A": "PASS — kalman dict has A (in [0.97, 1.06])",
+    "kalman_A3": "PASS — kalman dict has A3 = A^3 (verified mathematically)",
+    "root_pvi_field": "PASS — root level pvi float present",
+    "root_pvi_alert_field": "PASS — root level pvi_alert bool present, consistent with pvi > 15.0",
+    "root_rho_t3_shortcut": "PASS — root rho_t3 == kalman.rho_t3",
+    "commander_message_present": "PASS — commander_message string present",
+    "commander_level_present": "PASS — commander_level in [stable, critical, efficiency]",
+    "commander_level_consistent": "PASS — level matches rho_t3 thresholds",
+    "stable_message_optimal_flow": "PASS — stable level → 'OPTIMAL FLOW' in message",
+    "rho_history_t3_field": "PASS — rho_history entries have t3 (float) field",
+    "rho_history_t1_field": "PASS — rho_history entries retain t1 field",
+    "rho_history_full_schema": "PASS — time, rho, t1, t3 all present in last 3 entries",
+    "commander_console_ui": "PASS — data-testid='commander-console' visible on dashboard",
+    "commander_console_t3_rho_shown": "PASS — T+3 PROJ (135-MIN) section shows ρ=0.xxxx",
+    "commander_console_pvi_shown": "PASS — PVI (VOLATILITY) section shows 0.1%",
+    "commander_console_optimal_flow_message": "PASS — nominal state shows green 'MIMI KERNEL: OPTIMAL FLOW DETECTED. CERTAINTY 99.2%.'",
+    "area_chart_t3_kalman_legend": "PASS — area chart legend text shows 'T+3 KALMAN A³ (w=Xpx · Δ=Y%)'",
+    "pvi_alert_banner_conditional": "PASS — pvi-alert-banner NOT shown when pvi=0.1% (<15%), correctly conditional",
+    "ghost_trigger_revenue_counter": "PASS — revenue counter went from $425.52 → $1,154.42 in 10s of ghost activity",
+    "ghost_trigger_commander_updates": "PASS — T+3 ρ in commander console updated from 0.0999 → 0.4593 → 0.5180 across ghost cycles",
+    "readFileResilient_in_source": "PASS — readFileResilient() defined at line 7 of DataInjection.jsx, called in doUpload()",
+    "schema_mapper_ui": "PASS — SchemaMapper component renders with data-testid='schema-mapper' on SCHEMA_MISMATCH",
+    "pdf_export_btn": "PASS — export-pdf-btn visible, enabled, clickable with no errors",
+    "bar_chart_450px": "PASS — avg-delay-chart ResponsiveContainer computed height=450px",
+    "pie_chart_visible": "PASS — red-zone-importance-chart found in DOM",
+    "area_chart_visible": "PASS — rho-history-chart found in DOM"
+  },
+  "success_rate": {
+    "backend": "100% (25/25 tests passed)",
+    "frontend": "100% — all feature checks passed"
+  },
+  "seed_data_creation": "Backend tests uploaded test CSVs (test_weight.csv, test_cost.csv, test_corrupt_rows.csv). Ghost trigger inflated n_total to 3070. Backend state reset not done — app still functional with new data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All Iteration 4 features verified: T+3 Kalman A³ (A, A3, rho_t3, pvi in kalman dict + root), PVI/pvi_alert at root, commander_message/commander_level (3 states: stable/critical/efficiency), ISO-8859-1 encoding + on_bad_lines skip, rho_history t3 field, T+3 KALMAN A³ in area chart legend, ghost trigger revenue counter, CommanderConsole UI data-testid. Backend dataset changed to test_corrupt_rows.csv by test uploads; ghost trigger inflated to 3070 rows. Current rho~0.026 due to test uploads with mostly on-time rows. Minor: React hydration warning in FailureTable for tr/span nesting. Test file: /app/backend/tests/test_siti_iteration4.py"
+}

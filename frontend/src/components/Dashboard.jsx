@@ -79,6 +79,76 @@ function CalibrationOverlay() {
   );
 }
 
+/* ── Commander's Message Console ───────────────────────────── */
+function CommanderConsole({ kState }) {
+  const rho_t3   = kState?.kalman?.rho_t3 ?? 0;
+  const pvi      = kState?.pvi             ?? 0;
+  const pviAlert = kState?.pvi_alert       ?? false;
+
+  let message, statusColor, bgColor, statusLabel;
+  if (rho_t3 >= 0.85) {
+    message     = "CRITICAL: HUB SATURATION IMMINENT.\nINITIATE PREEMPTIVE DIVERSION TO BLOCK B.";
+    statusColor = "#FF3B30"; bgColor = "#1A0000"; statusLabel = "T+3 COLLAPSE";
+  } else if (rho_t3 < 0.50) {
+    message     = "EFFICIENCY GAP: HUB UNDER-UTILIZED.\nACCELERATE INBOUND INGESTION.";
+    statusColor = "#64D2FF"; bgColor = "#00101A"; statusLabel = "UNDER-UTILIZED";
+  } else {
+    message     = "MIMI KERNEL: OPTIMAL FLOW DETECTED.\nCERTAINTY 99.2%.";
+    statusColor = "#32D74B"; bgColor = "#001A05"; statusLabel = "NOMINAL";
+  }
+
+  return (
+    <div data-testid="commander-console"
+      style={{ background: "#0A0A0A", border: `1px solid ${statusColor}55`, padding: "12px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontSize: 9, color: "#D4D4D8", letterSpacing: "0.14em", textTransform: "uppercase" }}>
+          COMMANDER'S MESSAGE CONSOLE
+        </div>
+        <div style={{ fontSize: 8, color: statusColor, fontWeight: 700, letterSpacing: "0.1em" }}>
+          {statusLabel}
+        </div>
+      </div>
+
+      {pviAlert && (
+        <div data-testid="pvi-alert" className="blink-critical"
+          style={{ fontSize: 8, color: "#FF3B30", letterSpacing: "0.1em", marginBottom: 6,
+            padding: "3px 8px", background: "#200000", border: "1px solid #FF3B3066" }}>
+          PVI = {pvi.toFixed(1)}% — VOLATILITY &gt; 15% THRESHOLD
+        </div>
+      )}
+
+      <div style={{ background: bgColor, border: `1px solid ${statusColor}33`, padding: "9px 10px", marginBottom: 8 }}>
+        {message.split("\n").map((line, i) => (
+          <div key={i} style={{
+            fontSize: 9.5, color: statusColor, fontFamily: "JetBrains Mono",
+            fontWeight: 700, letterSpacing: "0.08em", lineHeight: 1.9,
+          }}>
+            {line}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        <div style={{ background: "#111", padding: "5px 8px", border: "1px solid #1A1A1A" }}>
+          <div style={{ fontSize: 8, color: "#888", letterSpacing: "0.08em" }}>T+3 PROJ (135-MIN)</div>
+          <div style={{ fontSize: 13, color: rho_t3 >= 0.85 ? "#FF3B30" : "#39FF14",
+            fontWeight: 700, fontFamily: "JetBrains Mono" }}>
+            ρ={rho_t3.toFixed(4)}
+          </div>
+        </div>
+        <div style={{ background: "#111", padding: "5px 8px", border: "1px solid #1A1A1A" }}>
+          <div style={{ fontSize: 8, color: "#888", letterSpacing: "0.08em" }}>PVI (VOLATILITY)</div>
+          <div style={{ fontSize: 13,
+            color: pvi > 15 ? "#FF3B30" : pvi > 8 ? "#FFB340" : "#32D74B",
+            fontWeight: 700, fontFamily: "JetBrains Mono" }}>
+            {pvi.toFixed(1)}%
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main Dashboard ─────────────────────────────────────────── */
 export default function Dashboard({
   kState, ticker, loading, apiBase, onRefresh,
@@ -142,7 +212,20 @@ export default function Dashboard({
         <ExecutiveHUD kState={kState} ticker={ticker} catastrophe={catastrophe}
           isStreaming={isStreaming} isGhostMode={isGhostMode} />
 
-        {/* Collapse Banner — ρ ≥ 0.85 */}
+        {/* PVI Alert — rising T+3 uncertainty */}
+        {kState?.pvi_alert && !collapse && (
+          <div data-testid="pvi-alert-banner"
+            style={{ background: "#1A0A00", border: "1px solid #FF9F0A",
+              padding: "8px 24px", display: "flex", alignItems: "center", gap: 12,
+              margin: "0 16px 4px" }}>
+            <span className="blink-critical" style={{ color: "#FF9F0A", fontSize: 10,
+              fontWeight: 700, letterSpacing: "0.12em", fontFamily: "JetBrains Mono" }}>
+              PREDICTIVE VOLATILITY INDEX: {(kState?.pvi ?? 0).toFixed(1)}% — T+3 RISING UNCERTAINTY
+            </span>
+          </div>
+        )}
+
+        {/* Collapse Banner */}
         {collapse && (
           <div
             data-testid="collapse-banner"
@@ -220,8 +303,9 @@ export default function Dashboard({
             <HubCharts kState={kState} />
           </div>
 
-          {/* RIGHT: Recovery + Kalman + Routing + Failure Table */}
+          {/* RIGHT: Commander Console + Recovery + Kalman + Routing + Failure Table */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <CommanderConsole kState={kState} />
             <RecoveryWidget ticker={ticker} kState={kState} />
             <KalmanWidget kState={kState} />
             <RoutingWidget kState={kState} />

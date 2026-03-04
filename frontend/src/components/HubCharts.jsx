@@ -88,14 +88,15 @@ export default function HubCharts({ kState }) {
     time:    h.time,
     rho_pct: +(h.rho  * 100).toFixed(2),
     t1_pct:  +(h.t1   * 100).toFixed(2),
-    gap:     +(Math.abs(h.rho - h.t1) * 100).toFixed(2),
+    t3_pct:  +((h.t3 ?? h.t1) * 100).toFixed(2),
+    gap:     +(Math.abs(h.rho - (h.t3 ?? h.t1)) * 100).toFixed(2),
   }));
 
-  /* T+1 line thickness scales with average gap → "Rising Uncertainty" */
+  /* T+3 line thickness scales with T0→T3 gap → "Rising Uncertainty" */
   const avgGap = rhoHistory.length > 1
     ? rhoHistory.reduce((s, h) => s + h.gap, 0) / rhoHistory.length
     : 1;
-  const t1StrokeWidth = +(Math.min(5.5, Math.max(1.5, 1.5 + avgGap * 0.35))).toFixed(1);
+  const t3StrokeWidth = +(Math.min(5.5, Math.max(1.5, 1.5 + avgGap * 0.35))).toFixed(1);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -194,7 +195,7 @@ export default function HubCharts({ kState }) {
             <span>
               <span style={{ color: "#39FF14", fontWeight: 700 }}>╌</span>{" "}
               <span style={{ color: "#CCCCCC" }}>
-                KALMAN PROJECTION (w={t1StrokeWidth}px · Δ={avgGap.toFixed(2)}%)
+                T+3 KALMAN A³ (w={t3StrokeWidth}px · Δ={avgGap.toFixed(2)}%)
               </span>
             </span>
           </div>
@@ -226,12 +227,12 @@ export default function HubCharts({ kState }) {
             <Area type="monotone" dataKey="rho_pct"
               stroke="#FFB340" strokeWidth={2.5} fill="url(#rhoGrad)"
               dot={false} name="ρ OBSERVED" isAnimationActive={false} />
-            {/* Kalman Projection — Neon Green dashed, variable width */}
-            <Area type="monotone" dataKey="t1_pct"
-              stroke="#39FF14" strokeWidth={t1StrokeWidth}
+            {/* Kalman T+3 Projection — Neon Green dashed, variable width */}
+            <Area type="monotone" dataKey="t3_pct"
+              stroke="#39FF14" strokeWidth={t3StrokeWidth}
               strokeDasharray="10 5"
               fill="url(#t1Grad)"
-              dot={false} name="KALMAN PROJECTION" isAnimationActive={false} />
+              dot={false} name="T+3 KALMAN (135-min)" isAnimationActive={false} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
