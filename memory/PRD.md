@@ -1,4 +1,4 @@
-# SITI Intelligence — PRD
+# SITI Intelligence — PRD (Updated 2026-03-04)
 
 ## Brand Identity
 - **Name**: SITI Intelligence
@@ -8,7 +8,7 @@
 - **Palette**: Bloomberg Amber (#FFB340) + Cyber Blue (#64D2FF) on Pure Black (#050505)
 
 ## Problem Statement
-Build "NodeGuard GSC," a SaaS Web Dashboard for predictive logistics recovery. Uses attached Train-Train.csv as initial industrial dataset for Safexpress Case #02028317. Core logic: MIMI Kernel with Hub Utilization (ρ), Sigmoidal Decay Φ(ρ), Inverse Reliability Paradox, Kalman Filter T+1 prediction.
+Build "SITI Intelligence," a SaaS Web Dashboard for predictive logistics recovery. Uses Safexpress Case #02028317 dataset. Core logic: MIMI Kernel with Hub Utilization (ρ), Sigmoidal Decay Φ(ρ), Inverse Reliability Paradox, Kalman Filter T+1 prediction.
 
 ## Architecture
 - **Frontend**: React 19 + Tailwind CSS + Recharts + KaTeX + react-fast-marquee
@@ -23,51 +23,58 @@ Build "NodeGuard GSC," a SaaS Web Dashboard for predictive logistics recovery. U
 
 ## Core Requirements (Static)
 1. MIMI Kernel: Hub Utilization ρ = N_late/N_total
-2. Sigmoidal Decay: Φ(ρ) = 1/(1 + e^(15(ρ - 0.85)))
+2. Sigmoidal Decay: Φ(ρ) = 1/(1 + e^(20(ρ - 0.85)))
 3. Inverse Reliability Paradox: High-importance failures × $3.94 leakage seed
 4. Kalman Filter T+1 prediction
-5. Catastrophe Alert when ρ > 0.80 (red UI + banner)
-6. Data Injection (Genius Reset) - CSV upload + LR refit
-7. PDF Forensic Audit Export with Mission LiFE tag
-8. Real-time auto-refresh every 4 seconds
-9. Dark mode (Bloomberg Terminal aesthetic)
-10. LaTeX formula display via KaTeX
+5. Catastrophe Alert when ρ > 0.80 (orange banner)
+6. Collapse Alert when ρ ≥ 0.85 (red full-screen border + red banner)
+7. Data Injection (Genius Reset) - CSV upload + LR refit + full-screen calibration overlay
+8. PDF Forensic Audit Export with Mission LiFE tag (static jsPDF imports)
+9. Real-time auto-refresh every 4 seconds
+10. Dark mode (Bloomberg Terminal aesthetic)
+11. LaTeX formula display via KaTeX
+12. Live Telemetry Stream — 100 virtual units every 10s without CSV
+13. Fuzzy column mapping for messy CSV uploads + mean-fill missing values
 
-## What's Been Implemented (Feb 24, 2026) — v2.0 Update
+## What's Been Implemented
 
-### Backend Enhancements
-- **Φ(ρ) Formula Updated**: k=20, Φ(ρ) = 1/(1 + e^{-20(ρ - ρ_c)}) — now represents INSTABILITY (higher = worse)
-- **W_q (M/M/1 Queue Wait)**: W_q = ρ/(1-ρ), μ=1 normalized
-- **average_delay_per_block()**: Customer_care_calls × mode_factor × 8h for late shipments per block
-- **red_zone_importance()**: Product importance breakdown (High/Medium/Low) for Red Zone (ρ>0.80) shipments
-- **routing_logic()**: Autonomous GSC routing — identifies overloaded (>0.85) vs available (<ρ_c-ε) blocks
-- **Two catastrophe levels**: catastrophe (ρ>0.80) + collapse (ρ≥0.85)
-- **Failure rate & CLV**: $1.20 recovery + $2.74 CLV = $3.94 leakage seed per unit
+### v1.0 (Initial Build)
+- Full-stack React/FastAPI project
+- MIMI Kernel with Sigmoidal Decay, Kalman Filter, fiscal leakage
+- Dashboard dark-mode UI, KPI cards, catastrophe alerts
+- Recharts bar/pie/area charts
+- PDF Forensic Audit Export
+- CSV upload Genius Reset
+- LaTeX formulas via KaTeX
+- Recovery counter real-time ticker
 
-### Frontend Updates
-- **HubCharts**: Replaced old utilization bar + mode pie with:
-  - NEW: "Average Delay per Warehouse Block" bar chart (hours, color-coded)
-  - NEW: "Red Zone Product Importance" pie chart (High=red, Medium=amber, Low=green)
-  - Reference lines at 0.80 and 0.85 on ρ trajectory chart
-- **MIMIPanel**: 6 formulas — updated Φ(ρ) with k=20 formula, new W_q formula, updated leakage ($1.20+$2.74=$3.94)
-- **Dashboard**: Two-level alert banners, Instability Index KPI, W_q KPI, failure rate KPI
-- **RoutingWidget**: GSC autonomous routing logic panel (overloaded/available blocks + ε buffer)
+### v2.0 (Feb 24, 2026 — Rebranding + Chart Enhancement)
+- Full rebrand from NodeGuard GSC → SITI Intelligence
+- Φ(ρ) updated: k=20 instability formula
+- W_q (M/M/1 queue wait), average_delay_per_block(), red_zone_importance()
+- RoutingWidget (GSC autonomous routing)
+- Two-level catastrophe alert (ρ>0.80 and ρ≥0.85)
+- Recharts: Average Delay per Warehouse Block + Red Zone Importance charts
 
-### Backend (server.py)
-- MIMIKernel class with base_rho(), phi(), kalman_step(), inverse_reliability(), warehouse_metrics(), mode_metrics(), fit_lr()
-- Synthetic Safexpress dataset generation (n=10999, ρ≈0.82)
-- GET /api/kernel/state - Full MIMI kernel state
-- POST /api/kernel/tick - Simulate incoming shipments, increment recovery counter
-- POST /api/kernel/upload - CSV upload, wipe historical weights, refit LR, recalculate ρ_critical
-- Logistic Regression (scikit-learn) for fresh threshold calculation on upload
+### v2.1 (Mar 04, 2026 — UI/UX Emergency Overhaul)
+- **PDF Stabilization**: Removed dynamic await import() — static jsPDF + autoTable imports
+- **Full-Screen Calibration Overlay**: Scrolling amber kernel weights background + progress bar
+- **Kill Zone Badge**: Dashed red "COLLAPSE THRESHOLD ρ=0.85" badge on bar chart
+- **Crimson Screen Border**: CSS pulse animation on full viewport when ρ ≥ 0.85
+- **Tooltip Fix**: All Recharts tooltips now use #1F2937 bg + #FFFFFF text
+- **Chart Size 2x**: Bar and Pie chart containers raised to 280px height
+- **External Pie Labels**: No-overlap labels with connector lines, white text
+- **High-Contrast Text**: Secondary text upgraded from #555→#888, #A1A1AA→#D4D4D8
+- **Live Telemetry Stream**: "INITIATE LIVE STREAM" toggle injects 100 virtual units every 10s
+- **Fuzzy Column Mapping**: Enhanced _fuzzy_map_columns() with 11-field matcher + carrier/tier aliases
+- **Mean-Fill**: Missing numeric values filled with column means (not zeros)
+- **3-Column DataInjection**: Genius Reset | PDF Export | Live Telemetry (separate columns)
 
-### Frontend Components
-- **ExecutiveHUD** - Logo, ticker marquee (react-fast-marquee), $2.81M exposure, status indicator
-- **Dashboard** - Main orchestrator, catastrophe mode, KPI cards, layout grid
-- **MIMIPanel** - 5 KaTeX LaTeX formulas: ρ, Φ(ρ), L, Kalman estimator, Kalman gain
-- **HubCharts** - Warehouse utilization bar chart, mode pie chart, ρ history area chart (Recharts)
-- **FailureTable** - Inverse reliability paradox table with pagination
-- **DataInjection** - CSV upload (Genius Reset) + PDF export (jsPDF + autotable + Mission LiFE tag)
+## Backend API Endpoints
+- `GET /api/kernel/state` — Full MIMI kernel state
+- `POST /api/kernel/tick` — Simulate incoming shipments, increment recovery counter
+- `POST /api/kernel/upload` — CSV upload with fuzzy mapping + mean-fill + LR refit
+- `POST /api/kernel/stream-batch?n=100` — Inject n virtual units for live telemetry
 
 ## Initial Dataset Stats
 - n_total: 10,999 shipments
@@ -78,31 +85,36 @@ Build "NodeGuard GSC," a SaaS Web Dashboard for predictive logistics recovery. U
 
 ## Prioritized Backlog
 
-### P0 (Critical - DONE)
-- [x] MIMI Kernel math implementation
-- [x] Dashboard with Bloomberg Terminal dark mode
-- [x] Catastrophe alert (ρ > 0.80)
-- [x] LaTeX formula rendering
+### P0 (DONE)
+- [x] MIMI Kernel math
+- [x] Dashboard Bloomberg Terminal dark mode
+- [x] Two-level catastrophe alert (ρ>0.80 / ρ≥0.85)
+- [x] LaTeX formula rendering (KaTeX)
 - [x] Kalman Filter T+1 prediction
 - [x] Recovery Counter real-time ticker
 - [x] Data Injection + Genius Reset
-- [x] PDF Forensic Audit Export
+- [x] PDF Forensic Audit Export (static imports)
+- [x] Full-screen calibration overlay
+- [x] Kill zone marker on bar chart
+- [x] Crimson screen border collapse mode
+- [x] Live Telemetry Stream
+- [x] Fuzzy column mapping + mean-fill
 
-### P1 (High Priority - Next Phase)
-- [ ] Authentication (login/session for B2B SaaS)
+### P1 (High Priority — Next Phase)
+- [ ] Authentication (JWT or Google OAuth) for B2B SaaS
 - [ ] Multiple case management (multiple Safexpress cases)
-- [ ] Real CSV data upload from actual Safexpress dataset
 - [ ] Email report delivery (SendGrid integration)
 - [ ] Historical case comparison
 
-### P2 (Enhancement - Future)
+### P2 (Enhancement — Future)
 - [ ] Multi-hub network visualization (graph/map)
 - [ ] Anomaly detection alerts (email/SMS via Twilio)
 - [ ] Revenue impact calculator with pricing tiers
 - [ ] White-label PDF with client branding
-- [ ] API rate limiting and key management
+- [ ] FastAPI lifespan context manager (replace deprecated @app.on_event)
+- [ ] Add warehouse block 'E' support in warehouse_metrics()
 
 ## Next Action Items
-1. Upload actual Safexpress Train.csv data via the Genius Reset module
-2. Add authentication for B2B SaaS monetization
-3. Integrate email delivery of forensic audit reports
+1. Add authentication for B2B SaaS monetization (JWT or Google OAuth)
+2. Integrate email delivery of forensic audit reports (SendGrid)
+3. Upload actual Safexpress Train.csv data via Genius Reset module
