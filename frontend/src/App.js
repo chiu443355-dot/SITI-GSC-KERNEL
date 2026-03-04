@@ -11,7 +11,10 @@ function App() {
   const [loading, setLoading]   = useState(true);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [isStreaming, setIsStreaming]     = useState(false);
-  const streamRef = useRef(null);
+  const [isGhostMode, setIsGhostMode]    = useState(false);
+  const streamRef     = useRef(null);
+  const ghostRef      = useRef(null);
+  const ghostCountRef = useRef(0);
 
   const fetchState = useCallback(async () => {
     try {
@@ -28,16 +31,14 @@ function App() {
     }
   }, []);
 
-  /* Live-stream: push 100 virtual units every 10 s */
+  /* ── Normal Live Stream: 100 units / 10s ─────────────── */
   const startLiveStream = useCallback(async () => {
     setIsStreaming(true);
     const push = async () => {
       try {
-        await axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/kernel/stream-batch?n=100`);
+        await axios.post(`${API}/kernel/stream-batch?n=100`);
         await fetchState();
-      } catch (e) {
-        console.error("Stream batch error:", e);
-      }
+      } catch (e) { console.error("Stream error:", e); }
     };
     await push();
     streamRef.current = setInterval(push, 10000);
@@ -45,21 +46,49 @@ function App() {
 
   const stopLiveStream = useCallback(() => {
     setIsStreaming(false);
-    if (streamRef.current) {
-      clearInterval(streamRef.current);
-      streamRef.current = null;
-    }
+    if (streamRef.current) { clearInterval(streamRef.current); streamRef.current = null; }
   }, []);
 
-  /* Periodic 4-second kernel state refresh */
+  /* ── Ghost Trigger: 50 units / 1s, auto-stops at 90s ─── */
+  const startGhostMode = useCallback(async () => {
+    // Halt normal stream if running
+    if (streamRef.current) { clearInterval(streamRef.current); streamRef.current = null; setIsStreaming(false); }
+    setIsGhostMode(true);
+    ghostCountRef.current = 0;
+    const push = async () => {
+      ghostCountRef.current += 1;
+      if (ghostCountRef.current > 90) {
+        setIsGhostMode(false);
+        if (ghostRef.current) { clearInterval(ghostRef.current); ghostRef.current = null; }
+        return;
+      }
+      try {
+        await axios.post(`${API}/kernel/stream-batch?n=50`);
+        await fetchState();
+      } catch (e) { console.error("Ghost trigger error:", e); }
+    };
+    await push();
+    ghostRef.current = setInterval(push, 1000);
+  }, [fetchState]);
+
+  const stopGhostMode = useCallback(() => {
+    setIsGhostMode(false);
+    ghostCountRef.current = 0;
+    if (ghostRef.current) { clearInterval(ghostRef.current); ghostRef.current = null; }
+  }, []);
+
+  /* ── Periodic 4-second state refresh ─────────────────── */
   useEffect(() => {
     fetchState();
     const id = setInterval(fetchState, 4000);
     return () => clearInterval(id);
   }, [fetchState]);
 
-  /* Cleanup stream on unmount */
-  useEffect(() => () => { if (streamRef.current) clearInterval(streamRef.current); }, []);
+  /* ── Cleanup on unmount ───────────────────────────────── */
+  useEffect(() => () => {
+    if (streamRef.current) clearInterval(streamRef.current);
+    if (ghostRef.current)  clearInterval(ghostRef.current);
+  }, []);
 
   return (
     <div className="App">
@@ -74,6 +103,9 @@ function App() {
         isStreaming={isStreaming}
         onStreamStart={startLiveStream}
         onStreamStop={stopLiveStream}
+        isGhostMode={isGhostMode}
+        onGhostStart={startGhostMode}
+        onGhostStop={stopGhostMode}
       />
     </div>
   );

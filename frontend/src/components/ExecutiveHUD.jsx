@@ -24,7 +24,7 @@ function SITILogo({ size = 34 }) {
   );
 }
 
-export default function ExecutiveHUD({ kState, ticker, catastrophe }) {
+export default function ExecutiveHUD({ kState, ticker, catastrophe, isStreaming, isGhostMode }) {
   const rho = kState?.rho ?? 0;
   const status = rho > 0.85 ? 'COLLAPSE' : rho > 0.80 ? 'CRITICAL' : rho > 0.75 ? 'WARNING' : 'NOMINAL';
   const statusColor = rho > 0.85 ? '#FF3B30' : rho > 0.80 ? '#FF9F0A' : rho > 0.75 ? '#FFB340' : '#32D74B';
@@ -89,11 +89,38 @@ export default function ExecutiveHUD({ kState, ticker, catastrophe }) {
           </div>
         </div>
 
-        {/* Status + Metrics */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.1em' }}>ANNUALIZED EXPOSURE</div>
-            <div style={{ fontSize: 16, color: '#FF3B30', fontWeight: 700, letterSpacing: '0.05em' }}>$2,810,000</div>
+        {/* Status + Metrics — $2.81M always anchored top-right */}
+        <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+
+          {/* LIVE INFERENCE badge — visible when Ghost Trigger or Live Stream active */}
+          {(isGhostMode || isStreaming) && (
+            <div className="live-inference-badge"
+              data-testid="live-inference-badge"
+              style={{
+                background: "#001A05",
+                border: "1px solid #39FF14",
+                color: "#39FF14",
+                fontFamily: "JetBrains Mono",
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: "0.15em",
+                padding: "3px 10px",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <span style={{
+                display: "inline-block", width: 6, height: 6, borderRadius: "50%",
+                background: "#39FF14",
+              }} />
+              LIVE INFERENCE
+            </div>
+          )}
+
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 9, color: "#888", letterSpacing: "0.1em" }}>ANNUALIZED EXPOSURE</div>
+            <div style={{ fontSize: 16, color: "#FF3B30", fontWeight: 700, letterSpacing: "0.05em" }}>$2,810,000</div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.1em' }}>HUB STATUS</div>

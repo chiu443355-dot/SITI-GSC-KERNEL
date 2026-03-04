@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import re
 import logging
 import random
 import numpy as np
@@ -310,6 +311,27 @@ async def kernel_tick():
     }
 
 
+def _sanitize_numeric(val):
+    """Strip non-numeric characters from messy values like '100kg', '$5.00', '3,500'."""
+    if isinstance(val, str):
+        cleaned = re.sub(r'[^\d.]', '', val.strip())
+        try:
+            return float(cleaned) if cleaned else 0.0
+        except ValueError:
+            return 0.0
+    return val
+
+
+def _sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply regex sanitizer to all numeric feature columns."""
+    num_cols = ['Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
+                'Prior_purchases', 'Discount_offered', 'Weight_in_gms']
+    for col in num_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(_sanitize_numeric)
+    return df
+
+
 def _fuzzy_map_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Fuzzy column mapper — String.includes()-style matching on messy headers."""
     TARGET_MAP = [
@@ -365,7 +387,26 @@ async def upload_dataset(file: UploadFile = File(...)):
         df = _fuzzy_map_columns(df)
 
         if 'Reached.on.Time_Y.N' not in df.columns:
-            raise HTTPException(status_code=400, detail="Cannot find on-time delivery column. Expected: 'Reached.on.Time_Y.N' or similar.")
+            # Build fuzzy suggestion for the missing column
+            suggestions = {}
+            for col in df.columns:
+                lower_col = col.lower().replace(' ', '_').replace('.', '_').replace('-', '_')
+                for kw in ['late', 'delayed', 'delay', 'status', 'delivery', 'on_time', 'reached', 'target']:
+                    if kw in lower_col:
+                        suggestions['Reached.on.Time_Y.N'] = col
+                        break
+                if 'Reached.on.Time_Y.N' in suggestions:
+                    break
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "type": "SCHEMA_MISMATCH",
+                    "found_columns": list(df.columns),
+                    "required_unmapped": ["Reached.on.Time_Y.N"],
+                    "fuzzy_suggestions": suggestions,
+                    "message": "SCHEMA MISMATCH: PLEASE MAP [Reached.on.Time_Y.N] TO SITI STANDARDS",
+                }
+            )
 
         # Normalise on-time column to 0/1
         col = df['Reached.on.Time_Y.N']
@@ -383,7 +424,9 @@ async def upload_dataset(file: UploadFile = File(...)):
             if cat_col not in df.columns:
                 df[cat_col] = default
 
-        # Fill missing numeric values with column means (not zeros)
+        # Regex-sanitize messy numeric fields ('100kg' → 100, '$5.00' → 5)
+        df = _sanitize_numeric_columns(df)
+        # Fill missing numeric values with column means
         df = _fill_missing_with_means(df)
 
         new_kernel = MIMIKernel(df)

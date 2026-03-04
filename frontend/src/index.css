@@ -79,10 +79,22 @@
   animation: collapseBorderPulse 0.9s ease-in-out infinite;
 }
 
-/* ── LIVE STREAM DOT ────────────────────────────────────────── */
-@keyframes streamDot {
-  0%, 100% { opacity: 1; box-shadow: 0 0 4px #32D74B; }
-  50%       { opacity: 0.5; box-shadow: 0 0 10px #32D74B; }
+/* ── LIVE INFERENCE badge ───────────────────────────────── */
+@keyframes liveInferencePulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 5px #39FF14; }
+  50%       { opacity: 0.35; box-shadow: 0 0 14px #39FF14; }
+}
+.live-inference-badge {
+  animation: liveInferencePulse 0.75s ease-in-out infinite;
+}
+
+/* ── GHOST TRIGGER button glow ───────────────────────────── */
+@keyframes ghostGlow {
+  0%, 100% { box-shadow: 0 0 4px #39FF1466; }
+  50%       { box-shadow: 0 0 14px #39FF14AA; }
+}
+.ghost-active-btn {
+  animation: ghostGlow 0.9s ease-in-out infinite;
 }
 
 /* ── EXISTING CRITICAL BLINK ────────────────────────────────── */

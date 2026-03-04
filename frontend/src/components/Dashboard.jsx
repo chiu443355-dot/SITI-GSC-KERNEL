@@ -84,6 +84,7 @@ export default function Dashboard({
   kState, ticker, loading, apiBase, onRefresh,
   isCalibrating, setCalibrating,
   isStreaming, onStreamStart, onStreamStop,
+  isGhostMode, onGhostStart, onGhostStop,
 }) {
   const catastrophe = kState?.catastrophe;
   const collapse    = kState?.collapse;
@@ -138,7 +139,8 @@ export default function Dashboard({
         }}
       >
         {/* Executive HUD */}
-        <ExecutiveHUD kState={kState} ticker={ticker} catastrophe={catastrophe} isStreaming={isStreaming} />
+        <ExecutiveHUD kState={kState} ticker={ticker} catastrophe={catastrophe}
+          isStreaming={isStreaming} isGhostMode={isGhostMode} />
 
         {/* Collapse Banner — ρ ≥ 0.85 */}
         {collapse && (
@@ -232,6 +234,7 @@ export default function Dashboard({
           apiBase={apiBase} onRefresh={onRefresh} kState={kState} ticker={ticker}
           onCalibrating={setCalibrating}
           isStreaming={isStreaming} onStreamStart={onStreamStart} onStreamStop={onStreamStop}
+          isGhostMode={isGhostMode} onGhostStart={onGhostStart} onGhostStop={onGhostStop}
         />
       </div>
     </>
