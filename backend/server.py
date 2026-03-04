@@ -310,50 +310,71 @@ async def kernel_tick():
     }
 
 
+def _fuzzy_map_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Fuzzy column mapper — String.includes()-style matching on messy headers."""
+    TARGET_MAP = [
+        ('Reached.on.Time_Y.N',  lambda l: ('reached' in l) or ('on_time' in l) or ('ontime' in l) or ('delivered' in l) or ('on_time_y' in l)),
+        ('Warehouse_block',       lambda l: ('warehouse' in l) or ('wh_block' in l) or ('block' in l and 'hub' not in l)),
+        ('Mode_of_Shipment',      lambda l: ('mode' in l) or ('shipment' in l) or ('transport' in l) or ('carrier' in l)),
+        ('Customer_care_calls',   lambda l: ('care' in l and 'call' in l) or ('cc_call' in l) or ('support_call' in l)),
+        ('Customer_rating',       lambda l: ('rating' in l) or ('score' in l and 'customer' in l) or ('csat' in l)),
+        ('Cost_of_the_Product',   lambda l: ('cost' in l) or ('price' in l) or ('product_cost' in l) or ('amount' in l)),
+        ('Prior_purchases',       lambda l: ('prior' in l) or ('purchase' in l) or ('prev_buy' in l) or ('history' in l)),
+        ('Product_importance',    lambda l: ('importance' in l) or ('priority' in l) or ('prod_imp' in l) or ('tier' in l)),
+        ('Gender',                lambda l: l in ('gender', 'sex', 'g')),
+        ('Discount_offered',      lambda l: ('discount' in l) or ('promo' in l) or ('rebate' in l)),
+        ('Weight_in_gms',         lambda l: ('weight' in l) or ('wt' in l) or ('mass' in l) or ('gms' in l) or ('gram' in l)),
+    ]
+    col_map = {}
+    already_mapped = set()
+    for col in df.columns:
+        lower = col.lower().replace(' ', '_').replace('.', '_').replace('-', '_')
+        for target, matcher in TARGET_MAP:
+            if target not in already_mapped and matcher(lower):
+                col_map[col] = target
+                already_mapped.add(target)
+                break
+    return df.rename(columns=col_map)
+
+
+def _fill_missing_with_means(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing / NaN numeric values with column means; categoricals with mode."""
+    num_cols = ['Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
+                'Prior_purchases', 'Discount_offered', 'Weight_in_gms']
+    for col in num_cols:
+        if col in df.columns:
+            col_mean = df[col].mean()
+            if pd.isna(col_mean):
+                col_mean = 0
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(col_mean).astype(int)
+    cat_defaults = {'Warehouse_block': 'A', 'Mode_of_Shipment': 'Ship',
+                    'Product_importance': 'Medium', 'Gender': 'M'}
+    for col, default in cat_defaults.items():
+        if col in df.columns:
+            df[col] = df[col].fillna(default)
+    return df
+
+
 @api_router.post("/kernel/upload")
 async def upload_dataset(file: UploadFile = File(...)):
     try:
         content = await file.read()
         df = pd.read_csv(io.BytesIO(content))
 
-        col_map = {}
-        for col in df.columns:
-            lower = col.lower().replace(' ', '_').replace('.', '_')
-            if 'reached' in lower or ('on_time' in lower):
-                col_map[col] = 'Reached.on.Time_Y.N'
-            elif 'warehouse' in lower or ('block' in lower and 'warehouse' in lower):
-                col_map[col] = 'Warehouse_block'
-            elif 'shipment' in lower or 'mode' in lower:
-                col_map[col] = 'Mode_of_Shipment'
-            elif 'care' in lower and 'call' in lower:
-                col_map[col] = 'Customer_care_calls'
-            elif 'rating' in lower:
-                col_map[col] = 'Customer_rating'
-            elif 'cost' in lower:
-                col_map[col] = 'Cost_of_the_Product'
-            elif 'prior' in lower or 'purchase' in lower:
-                col_map[col] = 'Prior_purchases'
-            elif 'importance' in lower:
-                col_map[col] = 'Product_importance'
-            elif col.lower() == 'gender':
-                col_map[col] = 'Gender'
-            elif 'discount' in lower:
-                col_map[col] = 'Discount_offered'
-            elif 'weight' in lower:
-                col_map[col] = 'Weight_in_gms'
-
-        df = df.rename(columns=col_map)
+        # Fuzzy column mapping
+        df = _fuzzy_map_columns(df)
 
         if 'Reached.on.Time_Y.N' not in df.columns:
-            raise HTTPException(status_code=400, detail="Cannot find on-time delivery column")
+            raise HTTPException(status_code=400, detail="Cannot find on-time delivery column. Expected: 'Reached.on.Time_Y.N' or similar.")
 
+        # Normalise on-time column to 0/1
         col = df['Reached.on.Time_Y.N']
         if col.dtype == object:
             df['Reached.on.Time_Y.N'] = col.map(
                 lambda x: 1 if str(x).strip().upper() in ['Y', 'YES', '1', 'TRUE'] else 0
             ).astype(int)
         else:
-            df['Reached.on.Time_Y.N'] = col.astype(int)
+            df['Reached.on.Time_Y.N'] = pd.to_numeric(col, errors='coerce').fillna(0).astype(int)
 
         if 'ID' not in df.columns:
             df['ID'] = range(1, len(df) + 1)
@@ -361,10 +382,9 @@ async def upload_dataset(file: UploadFile = File(...)):
                                   ('Product_importance', 'Medium'), ('Gender', 'M')]:
             if cat_col not in df.columns:
                 df[cat_col] = default
-        for num_col in ['Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
-                        'Prior_purchases', 'Discount_offered', 'Weight_in_gms']:
-            if num_col not in df.columns:
-                df[num_col] = 0
+
+        # Fill missing numeric values with column means (not zeros)
+        df = _fill_missing_with_means(df)
 
         new_kernel = MIMIKernel(df)
         new_critical_rho = new_kernel.fit_lr()
@@ -389,6 +409,54 @@ async def upload_dataset(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Upload error: {e}")
         raise HTTPException(status_code=400, detail=f"CSV parse error: {str(e)}")
+
+
+@api_router.post("/kernel/stream-batch")
+async def stream_batch(n: int = 100):
+    """Inject n virtual shipment units based on current kernel ρ distribution — Live Telemetry mode."""
+    mimi: MIMIKernel = _session["mimi"]
+    if mimi is None:
+        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
+
+    rng = np.random.default_rng()
+    rho_base = mimi.base_rho()
+    # Late probability fluctuates around current ρ with small Gaussian noise
+    late_prob = float(np.clip(rho_base + rng.normal(0, 0.018), 0.55, 0.98))
+
+    new_rows = pd.DataFrame({
+        'ID':                 range(mimi.n_total + 1, mimi.n_total + n + 1),
+        'Warehouse_block':    rng.choice(['A', 'B', 'C', 'D', 'F'], n),
+        'Mode_of_Shipment':   rng.choice(['Ship', 'Flight', 'Road'], n, p=[0.55, 0.33, 0.12]),
+        'Customer_care_calls': rng.integers(1, 8, n).astype(int),
+        'Customer_rating':    rng.integers(1, 6, n).astype(int),
+        'Cost_of_the_Product': rng.integers(96, 310, n).astype(int),
+        'Prior_purchases':    rng.integers(2, 8, n).astype(int),
+        'Product_importance': rng.choice(['Low', 'Medium', 'High'], n, p=[0.60, 0.25, 0.15]),
+        'Gender':             rng.choice(['F', 'M'], n),
+        'Discount_offered':   rng.integers(0, 66, n).astype(int),
+        'Weight_in_gms':      rng.integers(1000, 7100, n).astype(int),
+        'Reached.on.Time_Y.N': rng.choice([0, 1], n, p=[late_prob, 1.0 - late_prob]).astype(int),
+    })
+
+    mimi.df = pd.concat([mimi.df, new_rows], ignore_index=True)
+    mimi.n_total = len(mimi.df)
+    mimi._kx = None   # reset Kalman so it re-estimates from fresh data
+
+    new_rho = mimi.base_rho()
+    diverted = int(n * late_prob * 0.25)
+    _session["diverted_units"] += diverted
+    _session["revenue_saved"] = _session["diverted_units"] * mimi.LEAKAGE_SEED
+    _session["refresh_count"] += 1
+
+    return {
+        "success": True,
+        "injected": n,
+        "new_n_total": mimi.n_total,
+        "new_rho": round(new_rho, 4),
+        "diverted": diverted,
+        "total_diverted": _session["diverted_units"],
+        "revenue_saved": round(_session["revenue_saved"], 2),
+    }
 
 
 # ─── APP SETUP ────────────────────────────────────────────────────────────────

@@ -48,3 +48,56 @@
     margin: inherit; padding: inherit; gap: inherit; border: inherit;
   }
 }
+
+/* ── CALIBRATION OVERLAY ANIMATIONS ────────────────────────── */
+@keyframes calibratePulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+@keyframes calibrateProgress {
+  0%   { width: 0%; }
+  40%  { width: 55%; }
+  80%  { width: 88%; }
+  100% { width: 95%; }
+}
+@keyframes scrollKernelWeights {
+  0%   { transform: translateY(0); }
+  100% { transform: translateY(-50%); }
+}
+
+/* ── COLLAPSE BORDER (ρ ≥ 0.85) ────────────────────────────── */
+@keyframes collapseBorderPulse {
+  0%, 100% { box-shadow: inset 0 0 0 3px #DC2626; }
+  50%       { box-shadow: inset 0 0 0 5px #FF3B30, 0 0 40px #FF3B3033; }
+}
+.collapse-screen-border {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9990;
+  box-shadow: inset 0 0 0 3px #DC2626;
+  animation: collapseBorderPulse 0.9s ease-in-out infinite;
+}
+
+/* ── LIVE STREAM DOT ────────────────────────────────────────── */
+@keyframes streamDot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px #32D74B; }
+  50%       { opacity: 0.5; box-shadow: 0 0 10px #32D74B; }
+}
+
+/* ── EXISTING CRITICAL BLINK ────────────────────────────────── */
+.blink-critical {
+  animation: calibratePulse 1.2s ease-in-out infinite;
+}
+.calibrate-pulse-text {
+  animation: calibratePulse 1.5s ease-in-out infinite;
+}
+.scroll-kernel-weights {
+  animation: scrollKernelWeights 22s linear infinite;
+}
+.calibrate-progress-bar {
+  animation: calibrateProgress 3.5s ease-out forwards;
+}
+.stream-dot-live {
+  animation: streamDot 1s ease-in-out infinite;
+}
