@@ -4,10 +4,10 @@
 
 | Tier | Volume | Config | Cost |
 |------|--------|--------|------|
-| **Demo / Pilot** | 20 tenants, 100K rows/upload | Fly.io free, Atlas M0 | $0/mo |
-| **SME** (Safexpress, regional 3PL) | 100 tenants, 500K rows | Fly.io 1GB, Atlas M10 | ~$65/mo |
-| **Mid-Market** (Blue Dart, Ecom Express) | 300 tenants, 2M rows | Fly.io 4GB, Atlas M30, Redis | ~$275/mo |
-| **Enterprise** (Delhivery, 1.5M/day) | 1000+ tenants, streaming | K8s + Atlas M50 + Redis cluster | ~$2K/mo |
+| **Demo / Pilot** | 20 tenants, 100K rows/upload | render , Atlas M0 | $0/mo |
+| **SME** ( regional 3PL) | 100 tenants, 500K rows | Fly.io 1GB, Atlas M10 | ~$65/mo |
+| **Mid-Market**  | 300 tenants, 2M rows |  Atlas M30, Redis | ~$275/mo |
+| **Enterprise**  | 1000+ tenants, streaming | K8s + Atlas M50 + Redis cluster | ~$2K/mo |
 
 ---
 
