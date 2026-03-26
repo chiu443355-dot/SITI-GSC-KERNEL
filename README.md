@@ -4,27 +4,18 @@
 
 ## Quick Start
 
-### Backend (Fly.io — free, no card)
-
-```bash
-cd SITI_SOVEREIGN/backend
-flyctl launch --no-deploy
-flyctl secrets set \
-  MONGO_URL="mongodb+srv://user:pass@cluster.mongodb.net/?appName=SITI-Main" \
-  DB_NAME="siti_production" \
-  API_KEYS="your-admin-key:ADMIN" \
-  JWT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
-  FRONTEND_URL="https://your-app.vercel.app" \
-  RAZORPAY_WEBHOOK_SECRET="your-razorpay-secret" \
-  SENDGRID_KEY="SG.your-sendgrid-key"
-flyctl deploy
-```
+## Backend (Render - Production)
+1. Link this GitHub repo to your Render Web Service.
+2. Ensure **Runtime** is set to `Python 3`.
+3. **Build Command:** `pip install -r requirements.txt`
+4. **Start Command:** `gunicorn backend.app:app`
+5. **Environment Variables:** Set your `MONGO_URL`, `JWT_SECRET`, etc., in the Render Dashboard.
 
 ### Frontend (Vercel — free)
 
 Set in Vercel dashboard:
 ```
-REACT_APP_BACKEND_URL = https://your-app.fly.dev
+REACT_APP_BACKEND_URL = https://siti-gsc-kernel-1.onrender.com
 REACT_APP_API_KEY     = your-admin-key  (optional — users can log in instead)
 ```
 
