@@ -53,4 +53,4 @@ Copy `backend/.env.example` and fill in values. **Never commit a real `.env` fil
 
 ## Research
 
-IEEE Case #02028317 · Wankhede (2026) · Inverse Reliability Paradox
+ Inverse Reliability Paradox
