@@ -101,3 +101,27 @@ frontend/node_modules/.cache/default-development/7.pack
 # Environment files
 *.env
 *.env.*
+
+# ── Secrets — NEVER commit these ──────────────────────────────────────────────
+.env
+.env.local
+.env.production
+*.env
+
+# ── Backup files ──────────────────────────────────────────────────────────────
+backend/server_v*.py
+backend/server.bak.py
+backend/server_diamond.py
+backend/*_backup.py
+backend/*_pre_final.py
+backend/*_pre_ceo_final.py
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.joblib
+checkpoints/
+
+# ── Node ──────────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/build/
