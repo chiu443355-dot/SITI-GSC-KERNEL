@@ -11,12 +11,12 @@
 4. **Start Command:** `gunicorn backend.app:app`
 5. **Environment Variables:** Set your `MONGO_URL`, `JWT_SECRET`, etc., in the Render Dashboard.
 
-### Frontend (Vercel — free)
+### Frontend (Vercel)
 
 Set in Vercel dashboard:
 ```
 REACT_APP_BACKEND_URL = https://siti-gsc-kernel-1.onrender.com
-REACT_APP_API_KEY     = your-admin-key  (optional — users can log in instead)
+REACT_APP_API_KEY     
 ```
 
 ## Architecture
