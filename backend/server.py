@@ -33,9 +33,19 @@ logger = logging.getLogger(__name__)
 # ─── CONSTANTS ────────────────────────────────────────────────────────────────
 T_OPERATIONAL = 36.0  # hours — operational window for λ estimation
 HUB_BLOCK_MAP = {
-    "Alpha": ["A", "B"],
-    "Beta":  ["C", "D"],
-    "Gamma": ["F"],
+    "Mumbai BOM":   ["A", "B"],
+    "Delhi IGI":    ["C", "D"],
+    "Bengaluru":    ["E", "F"],
+    "Chennai MAA":  ["G", "H"],
+    "Hyderabad":    ["I", "J"],
+}
+
+HUB_META = {
+    "Mumbai BOM":  {"city": "Mumbai",    "region": "Maharashtra", "mu_default": 280},
+    "Delhi IGI":   {"city": "Delhi",     "region": "NCR",         "mu_default": 260},
+    "Bengaluru":   {"city": "Bengaluru", "region": "Karnataka",   "mu_default": 220},
+    "Chennai MAA": {"city": "Chennai",   "region": "Tamil Nadu",  "mu_default": 180},
+    "Hyderabad":   {"city": "Hyderabad", "region": "Telangana",   "mu_default": 160},
 }
 
 
@@ -454,7 +464,7 @@ async def get_kernel_state():
 
     # ── Per-hub state ──
     hub_states = []
-    for name in ["Alpha", "Beta", "Gamma"]:
+    for name in list(HUB_BLOCK_MAP.keys()):
         hub = mimi.hubs[name]
         eff_lambda = effective_lambdas[name]
         eff_rho = float(np.clip(eff_lambda / hub.mu, 0.0, 1.5)) if hub.mu > 0 else 1.0
@@ -498,7 +508,7 @@ async def get_kernel_state():
     irp = mimi.inverse_reliability()
 
     # ── Global Kalman (pick Alpha hub's kalman as representative, or compute aggregate) ──
-    alpha_k = hub_states[0]["kalman"] if hub_states else {}
+    alpha_k = hub_states[0] if hub_states else {}["kalman"] if hub_states else {}
 
     # ── Global rho history ──
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -763,7 +773,7 @@ async def intercept_endpoint(payload: dict = {}):
     effective, cascade = _compute_cascade(mimi.hubs)
 
     hub_summary = []
-    for name in ["Alpha", "Beta", "Gamma"]:
+    for name in list(HUB_BLOCK_MAP.keys()):
         hub = mimi.hubs[name]
         eff_rho = effective[name] / hub.mu if hub.mu > 0 else 1.0
         hub_summary.append({
