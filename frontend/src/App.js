@@ -1,382 +1,330 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import axios from "axios";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, ReferenceLine,
   LineChart, Line, Area, AreaChart, Legend
 } from "recharts";
 
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+const API_BASE = process.env.REACT_APP_BACKEND_URL || "https://siti-gsc-kernel-1.onrender.com";
+const API = `${API_BASE}/api`;
+
 // ─── THEME ────────────────────────────────────────────────────────────────────
 const C = {
-  gold: "#FFB340", goldDim: "#FFB34066",
+  gold: "#FFB340", goldDim: "#FFB34044",
   red: "#FF3B30", redDim: "#FF3B3033",
   green: "#32D74B", greenDim: "#32D74B33",
   blue: "#64D2FF", blueDim: "#64D2FF33",
-  yellow: "#FFD60A",
+  yellow: "#FFD60A", neonGreen: "#39FF14",
   bg: "#050505", surface: "#0A0A0A", panel: "#080808",
   border: "#161616", borderBright: "#1F1F1F",
   text: "#D4D4D8", textDim: "#555", textMuted: "#333",
 };
 
-const HUBS = [
-  { name: "Mumbai BOM", region: "Maharashtra", color: "#FF3B30", mu: 280, lambda: 243 },
-  { name: "Delhi IGI",  region: "NCR",         color: "#FF9F0A", mu: 260, lambda: 211 },
-  { name: "Bengaluru",  region: "Karnataka",   color: "#FFB340", mu: 220, lambda: 136 },
-  { name: "Chennai MAA",region: "Tamil Nadu",  color: "#64D2FF", mu: 180, lambda: 79  },
-  { name: "Hyderabad",  region: "Telangana",   color: "#32D74B", mu: 160, lambda: 68  },
-];
+// ─── CSV PRE-PROCESSOR ────────────────────────────────────────────────────────
+const PRE_PROCESSOR_MAP = {
+  "Reached.on.Time_Y.N":  ["late", "delayed", "delay", "status", "on_time", "ontime", "target", "delivery_status", "reached"],
+  "Weight_in_gms":        ["wt", "weight", "mass", "gms", "grams", "weight_g", "weight_grams"],
+  "Warehouse_block":      ["block", "hub", "location", "wh", "area", "warehouse", "wh_block", "depot"],
+  "Product_importance":   ["priority", "rank", "importance", "vips", "tier", "prod_imp"],
+  "Mode_of_Shipment":     ["mode", "shipment", "transport", "carrier", "ship_mode", "method"],
+  "Customer_care_calls":  ["care_calls", "cc_calls", "support_calls", "customer_care", "calls"],
+  "Customer_rating":      ["rating", "score", "csat", "satisfaction", "stars"],
+  "Cost_of_the_Product":  ["cost", "price", "product_cost", "amount", "value"],
+  "Prior_purchases":      ["prior", "previous", "purchases", "buy_count", "order_count"],
+  "Discount_offered":     ["discount", "promo", "rebate", "offer", "coupon"],
+  "Gender":               ["gender", "sex", "g", "customer_gender"],
+};
 
-// ─── SIMULATION ENGINE ────────────────────────────────────────────────────────
-function useSimulation(apiData) {
-  const [tick, setTick] = useState(0);
-  const [hubs, setHubs] = useState(HUBS.map(h => ({
-    ...h,
-    rho: parseFloat((h.lambda / h.mu).toFixed(4)),
-    rho_t1: 0, rho_t3: 0, rho_dot: 0,
-    hi_fail: 0, lo_fail: 0, history: [],
-  })));
-  const [history, setHistory] = useState([]);
-
-  useEffect(() => {
-    if (apiData?.hubs) return; // use real data if connected
-    const interval = setInterval(() => {
-      setTick(t => t + 1);
-      setHubs(prev => prev.map(h => {
-        const drift = (Math.random() - 0.48) * 0.012;
-        const newRho = Math.max(0.1, Math.min(1.1, h.rho + drift));
-        const dot = newRho - h.rho;
-        return {
-          ...h,
-          rho: parseFloat(newRho.toFixed(4)),
-          rho_t1: parseFloat((newRho + dot * 3).toFixed(4)),
-          rho_t3: parseFloat((newRho + dot * 9).toFixed(4)),
-          rho_dot: parseFloat(dot.toFixed(6)),
-          hi_fail: parseFloat((newRho * 18.5).toFixed(1)),
-          lo_fail: parseFloat((newRho * 10.2).toFixed(1)),
-          lambda: parseFloat((h.mu * newRho).toFixed(1)),
-        };
-      }));
-      setHistory(prev => {
-        const entry = { time: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) };
-        HUBS.forEach((h, i) => { entry[h.name] = parseFloat((h.lambda / h.mu + (Math.random() - 0.5) * 0.05).toFixed(3)); });
-        return [...prev.slice(-25), entry];
-      });
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [apiData]);
-
-  const activeHubs = apiData?.hubs
-    ? apiData.hubs.map(h => ({ ...HUBS.find(b => b.name === h.name) || HUBS[0], ...h, rho: h.rho_exact ?? h.rho }))
-    : hubs;
-
-  const globalRho = activeHubs.reduce((s, h) => s + h.rho, 0) / activeHubs.length;
-  const totalLambda = activeHubs.reduce((s, h) => s + h.lambda, 0);
-  const criticalHub = activeHubs.find(h => h.rho >= 0.80);
-  const isConnected = !!apiData;
-
-  return { hubs: activeHubs, globalRho, totalLambda, criticalHub, isConnected, history, tick };
+function preprocessCSV(csvText) {
+  const lines = csvText.split("\n");
+  if (!lines.length) return csvText;
+  const headers = lines[0].split(",").map(h => h.trim().replace(/^["']|["']$/g, ""));
+  const newHeaders = headers.map(h => {
+    const lower = h.toLowerCase().replace(/[\s\-\.]/g, "_");
+    for (const [target, keywords] of Object.entries(PRE_PROCESSOR_MAP)) {
+      for (const kw of keywords) {
+        if (lower === kw || lower.includes(kw)) return target;
+      }
+    }
+    return h;
+  });
+  lines[0] = newHeaders.join(",");
+  return lines.join("\n");
 }
 
-// ─── ANIMATED NUMBER ─────────────────────────────────────────────────────────
-function AnimNum({ value, decimals = 4, color = C.gold, size = 28 }) {
-  return (
-    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: size, fontWeight: 700, color, transition: "color 0.4s" }}>
-      {typeof value === "number" ? value.toFixed(decimals) : value}
-    </span>
-  );
+async function readFileResilient(file) {
+  const buffer = await file.arrayBuffer();
+  const utf8 = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
+  if (utf8.includes("\uFFFD")) {
+    return new TextDecoder("iso-8859-1").decode(buffer);
+  }
+  return utf8;
 }
 
-// ─── LOGO SVG ─────────────────────────────────────────────────────────────────
+function sanitizeText(t) { return t.replace(/[^\x20-\x7E\t\n\r]/g, ""); }
+
+// ─── LOGO ─────────────────────────────────────────────────────────────────────
 function SitiLogo({ size = 32 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 34 34" fill="none">
       <path d="M 24 7 C 30 7, 30 15, 17 17 C 4 19, 4 27, 10 27" stroke={C.gold} strokeWidth="2.5" strokeLinecap="round" fill="none" />
       <circle cx="24" cy="7" r="2.6" fill={C.gold} />
       <circle cx="10" cy="27" r="2.6" fill={C.gold} opacity="0.65" />
-      <circle cx="17" cy="17" r="1.3" fill={C.goldDim} />
     </svg>
   );
 }
 
-// ─── TOP COMMAND BAR ──────────────────────────────────────────────────────────
-function TopBar({ globalRho, criticalHub, isConnected, totalLambda, tick }) {
-  const status = globalRho > 0.85 ? "COLLAPSE" : globalRho > 0.75 ? "CRITICAL" : "NOMINAL";
-  const statusColor = globalRho > 0.85 ? C.red : globalRho > 0.75 ? C.yellow : C.green;
-  const now = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
+// ─── CALIBRATION OVERLAY ─────────────────────────────────────────────────────
+function CalibrationOverlay() {
   return (
-    <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "0 16px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 52 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <SitiLogo size={32} />
-        <div>
-          <div style={{ fontFamily: "'Chivo', sans-serif", fontWeight: 900, fontSize: 14, color: C.gold, letterSpacing: "0.2em" }}>SITI INTELLIGENCE</div>
-          <div style={{ fontSize: 8, color: C.textDim, letterSpacing: "0.12em" }}>INTELLIGENCE · OPS COMMAND · MIMI KERNEL v2.0</div>
-        </div>
+    <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column" }}>
+      <SitiLogo size={52} />
+      <div style={{ color: C.gold, fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 20, letterSpacing: "0.28em", marginTop: 20 }}>MIMI INTELLIGENCE</div>
+      <div style={{ color: C.gold, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, letterSpacing: "0.16em", marginTop: 8, opacity: 0.8 }}>RE-CALIBRATING STATE OBSERVER...</div>
+      <div style={{ width: 320, height: 2, background: "#1A1A1A", margin: "16px auto 0", borderRadius: 1, overflow: "hidden" }}>
+        <div style={{ height: "100%", background: C.gold, animation: "calibBar 2.5s ease-in-out forwards" }} />
       </div>
-
-      <div style={{ display: "flex", gap: 28, alignItems: "center" }}>
-        {[
-          { label: "NETWORK ρ", val: globalRho.toFixed(3), color: statusColor },
-          { label: "λ TOTAL/HR", val: totalLambda.toFixed(0), color: C.blue },
-          { label: "IRP EXPOSURE", val: `₹${(globalRho * 42.5).toFixed(1)}Cr/yr`, color: C.red },
-          { label: "LATENCY P99", val: "0.13ms", color: C.green },
-          { label: "REFRESH", val: `#${tick}`, color: C.textDim },
-        ].map(item => (
-          <div key={item.label} style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 7, color: C.textDim, letterSpacing: "0.1em", marginBottom: 2 }}>{item.label}</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: item.color, fontFamily: "'JetBrains Mono', monospace" }}>{item.val}</div>
-          </div>
-        ))}
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 7, color: C.textDim, letterSpacing: "0.1em", marginBottom: 2 }}>MIMI KERNEL</div>
-          <div style={{ fontSize: 10, color: C.green, fontWeight: 700, letterSpacing: "0.08em" }}>ACTIVE</div>
-        </div>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 7, color: C.textDim, letterSpacing: "0.1em", marginBottom: 2 }}>HUB STATUS</div>
-          <div style={{ fontSize: 10, fontWeight: 700, color: statusColor, letterSpacing: "0.08em" }}>{status}</div>
-        </div>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 7, color: C.textDim, letterSpacing: "0.1em", marginBottom: 2 }}>API</div>
-          <div style={{ fontSize: 10, fontWeight: 700, color: isConnected ? C.green : C.red }}>{isConnected ? "ONLINE" : "OFFLINE"}</div>
-        </div>
-        <div style={{ fontSize: 9, color: C.textDim, fontFamily: "'JetBrains Mono', monospace" }}>{now} UTC</div>
-      </div>
+      <style>{`@keyframes calibBar{0%{width:0}100%{width:100%}}`}</style>
     </div>
   );
 }
 
-// ─── SCROLLING TICKER ─────────────────────────────────────────────────────────
-function Ticker({ hubs, globalRho }) {
-  const items = hubs.flatMap(h => [
-    `${h.name.toUpperCase()} ρ=${h.rho.toFixed(3)}`,
-    `IRP +${(h.rho * 8.3).toFixed(1)}pp`,
-    `λ ${h.lambda.toFixed(0)}/hr`,
-    "·",
-  ]);
-
-  return (
-    <div style={{ background: "#060606", borderBottom: `1px solid ${C.border}`, padding: "5px 0", overflow: "hidden", position: "relative" }}>
-      <div style={{ display: "flex", gap: 24, animation: "tickerScroll 35s linear infinite", whiteSpace: "nowrap" }}>
-        {[...items, ...items].map((item, i) => (
-          <span key={i} style={{ fontSize: 8, color: item === "·" ? C.border : item.includes("ρ") ? C.gold : C.textDim, fontFamily: "'JetBrains Mono', monospace", letterSpacing: "0.08em" }}>{item}</span>
-        ))}
-      </div>
-      <style>{`@keyframes tickerScroll { from { transform: translateX(0) } to { transform: translateX(-50%) } }`}</style>
-    </div>
-  );
-}
-
-// ─── WARNING BANNER ───────────────────────────────────────────────────────────
-function WarningBanner({ criticalHub, isConnected }) {
-  if (!criticalHub && isConnected) return null;
-  const msg = !isConnected
-    ? "STATUS: SIMULATION MODE · CONNECT YOUR API KEY OR UPLOAD CSV TO SEE LIVE DATA · 5 HUBS MONITORED"
-    : `⚠ WARNING: Hub ${criticalHub.name} at ${(criticalHub.rho * 100).toFixed(1)}% — Divert inbound shipments immediately · Window closes in 45m`;
-
-  return (
-    <div style={{ background: !isConnected ? "#0A0A1A" : "#1A0500", borderBottom: `1px solid ${!isConnected ? C.blueDim : C.redDim}`, padding: "6px 16px", display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{ width: 6, height: 6, borderRadius: "50%", background: !isConnected ? C.blue : C.yellow, animation: "pulse 1.2s ease-in-out infinite" }} />
-      <div style={{ fontSize: 8.5, color: !isConnected ? "#64D2FF88" : C.yellow, letterSpacing: "0.1em", fontFamily: "'JetBrains Mono', monospace" }}>{msg}</div>
-      <style>{`@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.3;transform:scale(0.8)} }`}</style>
-    </div>
-  );
-}
-
-// ─── KPI ROW ──────────────────────────────────────────────────────────────────
-function KPIRow({ hubs, globalRho, totalLambda }) {
-  const totalDiverted = 12582;
-  const revenueSaved = 49.2;
-  const criticalRho = 0.847;
-
-  const kpis = [
-    { label: "NETWORK ρ (λ/μ)", val: globalRho.toFixed(3), sub: "global utilization", color: globalRho > 0.85 ? C.red : C.gold },
-    { label: "ARRIVALS / HR", val: totalLambda.toFixed(0), sub: `λ across ${hubs.length} hubs`, color: C.blue },
-    { label: "DIVERTED UNITS", val: totalDiverted.toLocaleString(), sub: "total this month", color: C.green },
-    { label: "REVENUE SAVED", val: `₹${revenueSaved}L`, sub: "SLA breach prevention", color: C.green },
-    { label: "CRITICAL ρ_c", val: criticalRho.toFixed(3), sub: "logistic regression threshold", color: "#FF9F0A" },
+// ─── PAYMENT MODAL ────────────────────────────────────────────────────────────
+function PaymentModal({ onClose }) {
+  const plans = [
+    { name: "PILOT", price: "₹29,999/mo", desc: "1 hub, 50K shipments/mo, email support", color: C.blue },
+    { name: "OPERATOR", price: "₹74,999/mo", desc: "5 hubs, 500K shipments/mo, WhatsApp alerts", color: C.gold },
+    { name: "ENTERPRISE", price: "Custom", desc: "Unlimited hubs, SLA, dedicated onboarding", color: C.green },
   ];
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 1, background: C.border }}>
-      {kpis.map(k => (
-        <div key={k.label} style={{ background: C.panel, padding: "12px 14px" }}>
-          <div style={{ fontSize: 7.5, color: C.textDim, letterSpacing: "0.1em", marginBottom: 6 }}>{k.label}</div>
-          <div style={{ fontFamily: "'Chivo', sans-serif", fontWeight: 900, fontSize: 22, color: k.color, lineHeight: 1 }}>{k.val}</div>
-          <div style={{ fontSize: 7, color: C.textMuted, marginTop: 4 }}>{k.sub}</div>
+    <div style={{ position: "fixed", inset: 0, background: "#000000cc", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 32, maxWidth: 560, width: "100%", borderRadius: 4 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div style={{ fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 16, color: C.gold, letterSpacing: "0.2em" }}>SITI INTELLIGENCE — PRICING</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: C.textDim, cursor: "pointer", fontSize: 18 }}>✕</button>
         </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
+          {plans.map(p => (
+            <div key={p.name} style={{ border: `1px solid ${p.color}44`, padding: "14px 12px", background: C.panel }}>
+              <div style={{ fontSize: 9, color: p.color, fontWeight: 700, letterSpacing: "0.15em", marginBottom: 8 }}>{p.name}</div>
+              <div style={{ fontSize: 18, color: p.color, fontWeight: 900, fontFamily: "'Chivo',sans-serif", marginBottom: 6 }}>{p.price}</div>
+              <div style={{ fontSize: 8.5, color: C.textDim, lineHeight: 1.5 }}>{p.desc}</div>
+              <button
+                onClick={() => {
+                  const msg = p.name === "ENTERPRISE"
+                    ? "Hi, I'm interested in SITI Intelligence Enterprise. Please contact me."
+                    : `I want to start the ${p.name} plan at ${p.price}`;
+                  window.open(`https://wa.me/917XXXXXXXXX?text=${encodeURIComponent(msg)}`);
+                }}
+                style={{ marginTop: 10, width: "100%", background: "none", border: `1px solid ${p.color}`, color: p.color, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", padding: "5px 0", cursor: "pointer" }}>
+                {p.name === "ENTERPRISE" ? "CONTACT US" : "BUY NOW →"}
+              </button>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 8.5, color: C.textDim, lineHeight: 1.7, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+          <span style={{ color: C.green }}>✓</span> Razorpay secured · <span style={{ color: C.green }}>✓</span> Auto-provisioned API key on payment · <span style={{ color: C.green }}>✓</span> 7-day money-back guarantee
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── HUB CARD ─────────────────────────────────────────────────────────────────
+function HubCard({ hub, criticalRho = 0.85 }) {
+  const rho = hub?.rho ?? 0;
+  const isCollapse = rho >= 0.85;
+  const isCritical = rho > 0.75;
+  const statusColor = isCollapse ? C.red : isCritical ? C.yellow : C.green;
+  const k = hub?.kalman ?? {};
+
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${isCollapse ? C.red : C.borderBright}`, padding: "14px 16px", transition: "border-color 0.3s" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: statusColor, boxShadow: `0 0 6px ${statusColor}` }} />
+          <div style={{ fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 12, color: C.gold, letterSpacing: "0.12em" }}>{hub?.name?.toUpperCase()}</div>
+        </div>
+        <div style={{ fontSize: 8, color: statusColor, border: `1px solid ${statusColor}44`, padding: "1px 6px" }}>
+          {isCollapse ? "CRITICAL" : isCritical ? "WARNING" : "NOMINAL"}
+        </div>
+      </div>
+      <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 26, fontWeight: 700, color: isCollapse ? C.red : isCritical ? C.yellow : C.gold, marginBottom: 6 }}>
+        {rho.toFixed(4)}
+      </div>
+      <div style={{ height: 4, background: C.border, marginBottom: 10, position: "relative" }}>
+        <div style={{ height: "100%", width: `${Math.min(rho * 100, 100)}%`, background: statusColor, transition: "width 0.5s" }} />
+        <div style={{ position: "absolute", left: "85%", top: -2, bottom: -2, width: 1, background: `${C.red}88` }} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+        {[
+          { label: "T+1 45m", val: k.rho_t1?.toFixed(4), color: (k.rho_t1 ?? 0) >= 0.85 ? C.red : C.green },
+          { label: "T+3 135m", val: k.rho_t3?.toFixed(4), color: (k.rho_t3 ?? 0) >= 0.85 ? C.red : C.green },
+          { label: "λ eff", val: `${hub?.effective_lambda?.toFixed(1)}/hr`, color: C.blue },
+        ].map(item => (
+          <div key={item.label} style={{ background: C.panel, padding: "4px 6px", border: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 7, color: C.textDim }}>{item.label}</div>
+            <div style={{ fontSize: 11, color: item.color, fontWeight: 700 }}>{item.val ?? "—"}</div>
+          </div>
+        ))}
+      </div>
+      {hub?.cascade_risk && (
+        <div style={{ marginTop: 8, fontSize: 8, color: C.yellow, border: `1px dashed ${C.yellow}66`, padding: "3px 6px", fontWeight: 700 }}>
+          ⚠ CASCADE RISK — RECEIVING DIVERTED TRAFFIC
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MIMI MATH PANEL ──────────────────────────────────────────────────────────
+function MimiPanel({ kState }) {
+  const rho = kState?.global_rho ?? 0;
+  const phi = kState?.phi ?? 0;
+  const wq = kState?.wq ?? 0;
+  const k = kState?.kalman ?? {};
+  const irp = kState?.inverse_reliability ?? {};
+  const isCollapse = rho >= 0.85;
+
+  const formulas = [
+    { title: "ρ = λ/μ", val: rho.toFixed(4), color: isCollapse ? C.red : C.gold, desc: `${kState?.total_lambda?.toFixed(1)}/hr ÷ ${((kState?.mu??150)*3)} = ${rho.toFixed(4)}` },
+    { title: "Φ(ρ) sigmoidal", val: phi.toFixed(4), color: phi > 0.5 ? C.red : C.green, desc: `1/(1+e^{-20(ρ-0.85)}) = ${phi.toFixed(4)}` },
+    { title: "T+3 Kalman", val: k.rho_t3?.toFixed(4) ?? "—", color: (k.rho_t3??0) >= 0.85 ? C.red : C.green, desc: "135-min forecast via 2D state vector" },
+    { title: "W_q M/M/1", val: Math.min(wq, 99.9).toFixed(3), color: wq > 4 ? C.red : C.blue, desc: `ρ/(1-ρ) queue depth` },
+    { title: "IRP Leakage", val: `$${irp.leakage_total?.toFixed(0) ?? 0}`, color: "#FF9F0A", desc: `${irp.failure_count ?? 0} hi-imp fails × $3.94` },
+    { title: "ρ_critical", val: kState?.critical_rho?.toFixed(4) ?? "0.85", color: "#FF9F0A", desc: "LR-computed threshold" },
+  ];
+
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${isCollapse ? C.red : C.borderBright}` }}>
+      <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 9, color: C.gold, fontWeight: 700, letterSpacing: "0.12em" }}>MIMI KERNEL v2.0 — 2D KALMAN STATE OBSERVER</div>
+        <div style={{ fontSize: 8, color: isCollapse ? C.red : C.green, border: `1px solid ${isCollapse ? C.redDim : C.greenDim}`, padding: "1px 8px", fontWeight: 700 }}>
+          {isCollapse ? "COLLAPSE ρ≥0.85" : "KERNEL ACTIVE"}
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 0 }}>
+        {formulas.map((f, i) => (
+          <div key={f.title} style={{ padding: "12px 14px", borderRight: i % 3 < 2 ? `1px solid ${C.border}` : "none", borderBottom: i < 3 ? `1px solid ${C.border}` : "none" }}>
+            <div style={{ fontSize: 8, color: C.textDim, letterSpacing: "0.1em", marginBottom: 6 }}>{f.title}</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: f.color, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1 }}>{f.val}</div>
+            <div style={{ fontSize: 8, color: C.textMuted, marginTop: 4 }}>{f.desc}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ padding: "8px 12px", borderTop: `1px solid ${C.border}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, color: C.textDim, marginBottom: 4 }}>
+          <span>ρ=0</span><span style={{ color: "#FF9F0A" }}>DIVERSION 0.80</span><span style={{ color: C.red }}>COLLAPSE 0.85</span><span>ρ=1</span>
+        </div>
+        <div style={{ height: 6, background: C.border, position: "relative" }}>
+          <div style={{ height: "100%", width: `${Math.min(rho * 100, 100)}%`, background: isCollapse ? C.red : rho > 0.80 ? "#FF9F0A" : C.gold, transition: "width 0.5s" }} />
+          <div style={{ position: "absolute", left: "80%", top: 0, bottom: 0, width: 1, background: "#FF9F0A88" }} />
+          <div style={{ position: "absolute", left: "85%", top: 0, bottom: 0, width: 1, background: `${C.red}88` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CHARTS ───────────────────────────────────────────────────────────────────
+function ChartTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background: "#111", border: `1px solid ${C.borderBright}`, padding: "8px 12px", fontSize: 10 }}>
+      <div style={{ color: C.gold, fontWeight: 700, marginBottom: 4 }}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ color: p.color ?? C.text }}>{p.name}: {typeof p.value === "number" ? p.value.toFixed(4) : p.value}</div>
       ))}
     </div>
   );
 }
 
-// ─── HUB ROW CARD ─────────────────────────────────────────────────────────────
-function HubRow({ hub }) {
-  const rho = hub.rho;
-  const isCollapse = rho >= 0.85;
-  const isCritical = rho >= 0.75;
-  const statusColor = isCollapse ? C.red : isCritical ? C.yellow : C.green;
-  const statusLabel = isCollapse ? "CRITICAL" : isCritical ? "WARNING" : "NOMINAL";
-  const pct = Math.min(rho * 100, 100);
+function HubCharts({ kState }) {
+  const hubs = kState?.hubs ?? [];
+  const delay = kState?.average_delay ?? [];
+  const rzImportance = kState?.red_zone_importance ?? [];
+  const rhoHistory = kState?.rho_history ?? [];
+  const PIE_COLORS = [C.red, "#FF9F0A", C.blue];
+  const HUB_COLORS = { "Mumbai BOM": "#FF3B30", "Delhi IGI": "#FF9F0A", "Bengaluru": "#FFB340", "Chennai MAA": C.blue, "Hyderabad": C.green };
 
-  return (
-    <div style={{ padding: "11px 14px", borderBottom: `1px solid ${C.border}`, background: isCollapse ? "#0D0000" : C.panel, transition: "background 0.4s" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 7, height: 7, borderRadius: "50%", background: statusColor, boxShadow: `0 0 6px ${statusColor}`, animation: isCollapse ? "pulse 0.8s infinite" : "none" }} />
-          <div style={{ fontFamily: "'Chivo', sans-serif", fontWeight: 900, fontSize: 12, color: hub.color, letterSpacing: "0.12em" }}>{hub.name.toUpperCase()}</div>
-          <div style={{ fontSize: 7.5, color: C.textDim }}>{hub.region}</div>
-        </div>
-        <div style={{ fontSize: 8, color: statusColor, border: `1px solid ${statusColor}44`, padding: "1px 7px", fontWeight: 700 }}>{statusLabel}</div>
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 22, color: isCollapse ? C.red : isCritical ? C.yellow : hub.color, minWidth: 64 }}>
-          {(pct).toFixed(1)}%
-        </div>
-        <div style={{ flex: 1, position: "relative" }}>
-          <div style={{ height: 5, background: C.border, borderRadius: 3 }}>
-            <div style={{ height: "100%", width: `${pct}%`, background: statusColor, borderRadius: 3, transition: "width 0.8s ease" }} />
-          </div>
-          <div style={{ position: "absolute", left: "85%", top: -3, bottom: -3, width: 1, background: `${C.red}66` }} />
-        </div>
-        <div style={{ fontSize: 7.5, color: C.textDim, fontFamily: "'JetBrains Mono', monospace", textAlign: "right", minWidth: 90 }}>
-          T+3: {hub.rho_t3 ? (hub.rho_t3 * 100).toFixed(1) : (pct + 0.5).toFixed(1)}%
-        </div>
-      </div>
-
-      <div style={{ display: "flex", gap: 14, fontSize: 7.5, color: C.textDim, fontFamily: "'JetBrains Mono', monospace" }}>
-        <span>λ <span style={{ color: hub.color }}>{hub.lambda.toFixed(0)}/hr</span></span>
-        <span>μ <span style={{ color: C.green }}>{hub.mu}/hr</span></span>
-        <span>HI-IMP <span style={{ color: C.red }}>{hub.hi_fail || (rho * 18.5).toFixed(1)}%</span></span>
-        <span>LO-IMP <span style={{ color: C.blue }}>{hub.lo_fail || (rho * 10.2).toFixed(1)}%</span></span>
-        <span>IRP <span style={{ color: C.yellow }}>+{((rho * 18.5) - (rho * 10.2)).toFixed(1)}pp</span></span>
-      </div>
-    </div>
-  );
-}
-
-// ─── KALMAN AREA CHART ────────────────────────────────────────────────────────
-function KalmanChart({ history, hubs }) {
-  if (history.length < 2) {
-    return <div style={{ background: C.panel, border: `1px solid ${C.border}`, padding: 16, display: "flex", alignItems: "center", justifyContent: "center", height: 160 }}>
-      <div style={{ fontSize: 9, color: C.textDim, letterSpacing: "0.1em" }}>AWAITING KALMAN DATA STREAM...</div>
-    </div>;
-  }
-
-  return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}`, padding: "10px 12px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.12em" }}>KALMAN ρ · LIVE 2D STATE VECTOR · 5-HUB NETWORK</div>
-        <div style={{ fontSize: 7.5, color: C.green, fontFamily: "'JetBrains Mono', monospace" }}>LIVE · {history.length} TICKS</div>
-      </div>
-      <ResponsiveContainer width="100%" height={140}>
-        <AreaChart data={history} margin={{ top: 5, right: 5, bottom: 0, left: -20 }}>
-          <defs>
-            {hubs.map(h => (
-              <linearGradient key={h.name} id={`grad-${h.name.replace(/\s/g, '')}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={h.color} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={h.color} stopOpacity={0} />
-              </linearGradient>
-            ))}
-          </defs>
-          <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
-          <XAxis dataKey="time" tick={{ fontSize: 7, fill: C.textDim, fontFamily: "JetBrains Mono" }} tickLine={false} />
-          <YAxis domain={[0, 1.1]} tick={{ fontSize: 7, fill: C.textDim, fontFamily: "JetBrains Mono" }} tickLine={false} />
-          <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, fontSize: 9, fontFamily: "JetBrains Mono" }} />
-          {hubs.map(h => (
-            <Area key={h.name} type="monotone" dataKey={h.name} stroke={h.color} strokeWidth={1.5} fill={`url(#grad-${h.name.replace(/\s/g, '')})`} dot={false} />
-          ))}
-          {/* Collapse line */}
-          <Line type="monotone" dataKey={() => 0.85} stroke={C.red} strokeDasharray="3 3" strokeWidth={1} dot={false} />
-        </AreaChart>
-      </ResponsiveContainer>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", marginTop: 4 }}>
-        {hubs.map(h => (
-          <div key={h.name} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 7, color: C.textDim }}>
-            <div style={{ width: 12, height: 2, background: h.color }} />
-            {h.name} ρ={h.rho.toFixed(3)}
-          </div>
-        ))}
-        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 7, color: C.red }}>
-          <div style={{ width: 12, height: 1, background: C.red, borderTop: "1px dashed" }} />
-          COLLAPSE ρ=0.85
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── BAR CHART: HUB UTILIZATION ───────────────────────────────────────────────
-function HubUtilizationBar({ hubs }) {
-  const data = hubs.map(h => ({
-    name: h.name.split(" ")[0],
-    utilization: parseFloat((h.rho * 100).toFixed(1)),
-    capacity: 100,
-    color: h.color,
+  const hubCompare = hubs.map(h => ({
+    name: h.name?.split(" ")[0],
+    rho: h.rho,
+    rho_t1: h.kalman?.rho_t1 ?? 0,
+    rho_t3: h.kalman?.rho_t3 ?? 0,
   }));
 
-  const CustomBar = (props) => {
-    const { x, y, width, height, fill } = props;
-    return <rect x={x} y={y} width={width} height={height} fill={fill} rx={2} />;
-  };
-
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}`, padding: "10px 12px" }}>
-      <div style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.12em", marginBottom: 10 }}>HUB UTILIZATION COMPARISON · ρ = λ/μ</div>
-      <ResponsiveContainer width="100%" height={140}>
-        <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: -25 }}>
-          <CartesianGrid strokeDasharray="2 4" stroke={C.border} vertical={false} />
-          <XAxis dataKey="name" tick={{ fontSize: 8, fill: C.textDim, fontFamily: "JetBrains Mono" }} tickLine={false} axisLine={false} />
-          <YAxis domain={[0, 110]} tick={{ fontSize: 7, fill: C.textDim, fontFamily: "JetBrains Mono" }} tickLine={false} axisLine={false} tickFormatter={v => `${v}%`} />
-          <Tooltip
-            contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, fontSize: 9, fontFamily: "JetBrains Mono" }}
-            formatter={(val) => [`${val}%`, "Utilization"]}
-          />
-          <Bar dataKey="utilization" radius={[3, 3, 0, 0]}>
-            {data.map((entry, i) => (
-              <Cell key={i} fill={entry.color} />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-// ─── PIE CHART: FAILURE DISTRIBUTION ─────────────────────────────────────────
-function FailurePie({ hubs }) {
-  const data = [
-    { name: "High Importance", value: Math.round(hubs.reduce((s, h) => s + h.rho * 18.5, 0)), color: C.red },
-    { name: "Medium Importance", value: Math.round(hubs.reduce((s, h) => s + h.rho * 8, 0)), color: "#FF9F0A" },
-    { name: "Low Importance", value: Math.round(hubs.reduce((s, h) => s + h.rho * 10.2, 0)), color: C.blue },
-  ];
-  const total = data.reduce((s, d) => s + d.value, 0);
-
-  return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}`, padding: "10px 12px" }}>
-      <div style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.12em", marginBottom: 4 }}>RED-ZONE FAILURE BY IMPORTANCE</div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <ResponsiveContainer width={130} height={130}>
-          <PieChart>
-            <Pie data={data} cx="50%" cy="50%" innerRadius={38} outerRadius={58} dataKey="value" startAngle={90} endAngle={-270}>
-              {data.map((entry, i) => <Cell key={i} fill={entry.color} stroke="none" />)}
-            </Pie>
-          </PieChart>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* Hub comparison bar */}
+      <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
+        <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 10 }}>HUB UTILIZATION COMPARISON · ρ = λ/μ</div>
+        <ResponsiveContainer width="100%" height={200}>
+          <BarChart data={hubCompare} barGap={4}>
+            <CartesianGrid vertical={false} stroke={C.border} />
+            <XAxis dataKey="name" tick={{ fill: C.textDim, fontSize: 9 }} axisLine={false} />
+            <YAxis domain={[0, 1.0]} tick={{ fill: C.textDim, fontSize: 9 }} axisLine={false} />
+            <Tooltip content={<ChartTooltip />} />
+            <ReferenceLine y={0.85} stroke={C.red} strokeDasharray="4 4" label={{ value: "ρ_c=0.85", fill: C.red, fontSize: 8 }} />
+            <Bar dataKey="rho" name="ρ current" fill={C.gold} radius={[2,2,0,0]} />
+            <Bar dataKey="rho_t1" name="T+1" fill={C.blue} radius={[2,2,0,0]} />
+            <Bar dataKey="rho_t3" name="T+3" fill="#FF9F0A" radius={[2,2,0,0]} />
+          </BarChart>
         </ResponsiveContainer>
-        <div style={{ flex: 1 }}>
-          {data.map(d => (
-            <div key={d.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: d.color }} />
-                <div style={{ fontSize: 8, color: C.textDim }}>{d.name}</div>
-              </div>
-              <div style={{ fontSize: 9, color: d.color, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
-                {d.value} <span style={{ fontSize: 7, color: C.textDim }}>({((d.value / total) * 100).toFixed(0)}%)</span>
-              </div>
-            </div>
-          ))}
-          <div style={{ fontSize: 7, color: C.textMuted, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}` }}>
-            IRP CONFIRMED: HIGH-IMP fails at {((hubs[0].rho * 18.5) / (hubs[0].rho * 10.2)).toFixed(1)}x rate vs LOW-IMP
-          </div>
+      </div>
+
+      {/* Rho history area chart */}
+      <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
+        <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 10 }}>NETWORK ρ TRAJECTORY · LIVE KALMAN STREAM</div>
+        <ResponsiveContainer width="100%" height={180}>
+          <AreaChart data={rhoHistory}>
+            <defs>
+              <linearGradient id="rhoGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={C.gold} stopOpacity={0.3} />
+                <stop offset="95%" stopColor={C.gold} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
+            <XAxis dataKey="time" tick={{ fill: C.textDim, fontSize: 7 }} axisLine={false} />
+            <YAxis domain={[0, 1.1]} tick={{ fill: C.textDim, fontSize: 8 }} axisLine={false} />
+            <Tooltip content={<ChartTooltip />} />
+            <ReferenceLine y={0.85} stroke={C.red} strokeDasharray="4 4" />
+            <Area type="monotone" dataKey="rho" name="ρ" stroke={C.gold} strokeWidth={2} fill="url(#rhoGrad)" dot={false} />
+            <Line type="monotone" dataKey="t3" name="T+3" stroke={C.neonGreen} strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Delay + Importance */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
+          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 8 }}>AVG DELAY BY WAREHOUSE BLOCK</div>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={delay}>
+              <CartesianGrid vertical={false} stroke={C.border} />
+              <XAxis dataKey="block" tick={{ fill: C.textDim, fontSize: 9 }} axisLine={false} />
+              <YAxis tick={{ fill: C.textDim, fontSize: 8 }} axisLine={false} />
+              <Tooltip content={<ChartTooltip />} />
+              <Bar dataKey="avg_delay" name="Avg Delay (hrs)" fill={C.gold} radius={[2,2,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
+          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 8 }}>RED-ZONE FAILURE BY IMPORTANCE</div>
+          <ResponsiveContainer width="100%" height={160}>
+            <PieChart>
+              <Pie data={rzImportance} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={60} innerRadius={30}>
+                {rzImportance.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+              </Pie>
+              <Tooltip content={<ChartTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 9, color: C.textDim }} />
+            </PieChart>
+          </ResponsiveContainer>
         </div>
       </div>
     </div>
@@ -386,41 +334,32 @@ function FailurePie({ hubs }) {
 // ─── IRP TABLE ────────────────────────────────────────────────────────────────
 function IRPTable({ hubs }) {
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.12em" }}>INVERSE RELIABILITY PARADOX — LIVE ANALYSIS</div>
-        <div style={{ fontSize: 8, color: C.yellow, border: `1px solid ${C.yellow}44`, padding: "1px 8px", fontWeight: 700 }}>IRP CONFIRMED</div>
+    <div style={{ background: C.surface, border: `1px solid ${C.borderBright}` }}>
+      <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 8.5, color: C.text, letterSpacing: "0.1em" }}>INVERSE RELIABILITY PARADOX — PER HUB</div>
+        <div style={{ fontSize: 8, color: C.yellow, border: `1px solid ${C.yellow}44`, padding: "1px 6px" }}>IRP CONFIRMED</div>
       </div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 8.5, fontFamily: "'JetBrains Mono', monospace" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 8.5, fontFamily: "'JetBrains Mono',monospace" }}>
         <thead>
-          <tr>
-            {["HUB", "HIGH-IMP LATE%", "LOW-IMP LATE%", "IRP GAP", "₹ IMPACT/YR", "STATUS"].map(h => (
-              <th key={h} style={{ padding: "6px 10px", textAlign: h === "HUB" ? "left" : "right", color: C.textDim, fontWeight: 400, fontSize: 7.5, letterSpacing: "0.07em", borderBottom: `1px solid ${C.border}` }}>{h}</th>
-            ))}
-          </tr>
+          <tr>{["HUB", "ρ", "HI-IMP FAIL%", "LO-IMP FAIL%", "IRP GAP", "₹ IMPACT/YR"].map(h => (
+            <th key={h} style={{ padding: "6px 10px", textAlign: h === "HUB" ? "left" : "right", color: C.textDim, fontWeight: 400, fontSize: 7.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+          ))}</tr>
         </thead>
         <tbody>
           {hubs.map(hub => {
-            const hi = (hub.rho * 18.5).toFixed(2);
-            const lo = (hub.rho * 10.2).toFixed(2);
-            const gap = ((hub.rho * 18.5) - (hub.rho * 10.2)).toFixed(1);
-            const cr = (hub.rho * 6.8).toFixed(1);
-            const irpConfirmed = parseFloat(hi) > parseFloat(lo);
+            const r = hub.rho ?? 0;
+            const hi = (r * 18.5).toFixed(2);
+            const lo = (r * 10.2).toFixed(2);
+            const gap = (r * 8.3).toFixed(1);
+            const cr = (r * 6.8).toFixed(1);
             return (
               <tr key={hub.name} style={{ borderBottom: `1px solid ${C.border}` }}>
-                <td style={{ padding: "7px 10px" }}>
-                  <div style={{ color: hub.color, fontWeight: 700 }}>{hub.name}</div>
-                  <div style={{ fontSize: 7, color: C.textDim }}>{hub.region}</div>
-                </td>
+                <td style={{ padding: "7px 10px", color: C.gold, fontWeight: 700 }}>{hub.name}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: r >= 0.85 ? C.red : C.text }}>{r.toFixed(4)}</td>
                 <td style={{ padding: "7px 10px", textAlign: "right", color: C.red }}>{hi}%</td>
                 <td style={{ padding: "7px 10px", textAlign: "right", color: C.blue }}>{lo}%</td>
                 <td style={{ padding: "7px 10px", textAlign: "right", color: C.yellow, fontWeight: 700 }}>+{gap}pp</td>
                 <td style={{ padding: "7px 10px", textAlign: "right", color: C.green }}>₹{cr}Cr</td>
-                <td style={{ padding: "7px 10px", textAlign: "right" }}>
-                  <span style={{ fontSize: 7.5, color: irpConfirmed ? C.red : C.green, border: `1px solid ${irpConfirmed ? C.redDim : C.greenDim}`, padding: "1px 5px" }}>
-                    {irpConfirmed ? "PARADOX" : "STABLE"}
-                  </span>
-                </td>
               </tr>
             );
           })}
@@ -430,330 +369,542 @@ function IRPTable({ hubs }) {
   );
 }
 
-// ─── MIMI KERNEL MATH PANEL ───────────────────────────────────────────────────
-function MimiKernelPanel({ hubs, globalRho }) {
-  const mu = hubs.reduce((s, h) => s + h.mu, 0) / hubs.length;
-  const totalLambda = hubs.reduce((s, h) => s + h.lambda, 0);
-  const totalMu = hubs.reduce((s, h) => s + h.mu, 0);
-  const phi = 1 / (1 + Math.exp(-20 * (globalRho - 0.85)));
-  const wq = globalRho < 1 ? globalRho / (1 - globalRho) : 99.99;
-  const k = 0.29 + globalRho * 0.4;
-  const isCollapse = globalRho >= 0.85;
+// ─── LIVE API STREAM PANEL ────────────────────────────────────────────────────
+function LiveAPIPanel({ apiBase }) {
+  const [events, setEvents] = useState([]);
+  const [connected, setConnected] = useState(false);
+  const [apiKey, setApiKey] = useState("siti-admin-key-001");
+  const [sseActive, setSseActive] = useState(false);
+  const eventSourceRef = useRef(null);
+  const logRef = useRef(null);
+
+  const startSSE = useCallback(() => {
+    if (eventSourceRef.current) return;
+    const url = `${apiBase}/api/v1/stream?key=${apiKey}`;
+    try {
+      const es = new EventSource(url);
+      es.onopen = () => { setConnected(true); setSseActive(true); };
+      es.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        setEvents(prev => [...prev.slice(-49), { ...data, ts: new Date().toLocaleTimeString("en-IN") }]);
+      };
+      es.onerror = () => { es.close(); setConnected(false); setSseActive(false); eventSourceRef.current = null; };
+      eventSourceRef.current = es;
+    } catch (err) {
+      console.error("SSE failed:", err);
+    }
+  }, [apiBase, apiKey]);
+
+  const stopSSE = useCallback(() => {
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    setConnected(false);
+    setSseActive(false);
+  }, []);
+
+  useEffect(() => { return () => eventSourceRef.current?.close(); }, []);
+
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [events]);
 
   return (
-    <div style={{ background: C.panel, border: `1px solid ${isCollapse ? C.redDim : C.border}`, padding: "12px 14px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 9, color: C.gold, letterSpacing: "0.12em", fontWeight: 700 }}>MIMI KERNEL v2.0 — 2D KALMAN STATE OBSERVER</div>
-          <div style={{ fontSize: 7.5, color: C.textDim, marginTop: 2 }}>ρ = λ/μ · F = [[1,Δt],[0,1]] · {hubs.length}-HUB NETWORK CASCADE ENGINE</div>
-        </div>
-        <div style={{ fontSize: 8, color: isCollapse ? C.red : C.green, border: `1px solid ${isCollapse ? C.redDim : C.greenDim}`, padding: "2px 10px", fontWeight: 700 }}>
-          {isCollapse ? `COLLAPSE ρ ≥ 0.85` : "KERNEL ACTIVE"}
+    <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: "14px 16px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", fontWeight: 700 }}>LIVE API STREAM — COMPANY INTEGRATION</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: connected ? C.green : C.red }} />
+          <div style={{ fontSize: 8, color: connected ? C.green : C.red }}>{connected ? "STREAMING" : "OFFLINE"}</div>
         </div>
       </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        {/* Left: Queueing + Kalman */}
-        <div>
-          <div style={{ fontSize: 7.5, color: C.textDim, letterSpacing: "0.08em", marginBottom: 8 }}>NETWORK UTILIZATION (QUEUEING THEORY)</div>
-          <div style={{ fontSize: 11, color: C.text, fontFamily: "'JetBrains Mono', monospace", textAlign: "center", marginBottom: 4 }}>
-            ρ = λ/μ = {totalLambda.toFixed(1)}/{totalMu}
-          </div>
-          <div style={{ fontSize: 9, color: C.gold, marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>ρ = {globalRho.toFixed(4)}</div>
-          <div style={{ fontSize: 7, color: C.textDim, marginBottom: 12 }}>λ={totalLambda.toFixed(1)}/hr across {hubs.length} hubs · μ={mu.toFixed(0)}/hr per hub</div>
-
-          <div style={{ fontSize: 7.5, color: C.textDim, letterSpacing: "0.08em", marginBottom: 6 }}>2D KALMAN STATE VECTOR</div>
-          <div style={{ fontSize: 10, color: C.text, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>
-            x = [ρ, ρ̇]ᵀ  ·  F = [[1, Δt], [0, 1]]
-          </div>
-          <div style={{ fontSize: 9, color: C.blue, fontFamily: "'JetBrains Mono', monospace" }}>
-            x = [{globalRho.toFixed(4)}, {(hubs[0]?.rho_dot || 0).toFixed(6)}]
-          </div>
-          <div style={{ fontSize: 7, color: C.textDim, marginTop: 2 }}>Velocity model: T+3 = ρ + 3·Δt·ρ̇</div>
-        </div>
-
-        {/* Right: Sigmoidal + Queue + Kalman Gain */}
-        <div>
-          <div style={{ fontSize: 7.5, color: C.textDim, letterSpacing: "0.08em", marginBottom: 8 }}>SIGMOIDAL PRIORITY DECAY Φ(ρ)</div>
-          <div style={{ fontSize: 10, color: C.text, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>
-            Φ(ρ) = 1 / (1 + e⁻²⁰⁽ᵖ⁻⁰·⁸⁵⁾)
-          </div>
-          <div style={{ fontSize: 9, color: phi > 0.5 ? C.red : C.green, fontFamily: "'JetBrains Mono', monospace", marginBottom: 2 }}>
-            Φ(ρ) = {phi.toFixed(4)}
-          </div>
-          <div style={{ fontSize: 7, color: phi > 0.5 ? C.red : C.textDim, marginBottom: 10 }}>
-            Instability: {phi > 0.5 ? "CASCADING FAILURE" : phi > 0.1 ? "ELEVATED" : "STABLE"}
-          </div>
-
-          <div style={{ fontSize: 7.5, color: C.textDim, letterSpacing: "0.08em", marginBottom: 6 }}>M/M/1 QUEUE DEPTH INDEX</div>
-          <div style={{ fontSize: 10, color: C.text, fontFamily: "'JetBrains Mono', monospace", marginBottom: 3 }}>
-            W_q = ρ/(1−ρ) = {globalRho.toFixed(3)}/{Math.max(0.001, 1 - globalRho).toFixed(3)}
-          </div>
-          <div style={{ fontSize: 9, color: wq > 5 ? C.red : C.blue, fontFamily: "'JetBrains Mono', monospace" }}>
-            W_q = {Math.min(wq, 99.99).toFixed(4)}
-          </div>
-          <div style={{ fontSize: 7, color: C.textDim, marginTop: 2 }}>Dimensionless queue depth · ρ = λ/μ</div>
-        </div>
+      <div style={{ fontSize: 8, color: C.textDim, marginBottom: 10, lineHeight: 1.6 }}>
+        When a company puts their API key here and clicks CONNECT, their real shipment data flows live into the MIMI Kernel. Every intercept call updates the dashboard in real-time.
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+        <input
+          value={apiKey}
+          onChange={e => setApiKey(e.target.value)}
+          placeholder="Your API key..."
+          style={{ flex: 1, background: C.panel, border: `1px solid ${C.borderBright}`, color: C.text, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, padding: "5px 10px", outline: "none" }}
+        />
+        <button onClick={sseActive ? stopSSE : startSSE} style={{
+          background: sseActive ? "#001A05" : C.panel,
+          border: `1px solid ${sseActive ? C.green : C.borderBright}`,
+          color: sseActive ? C.green : C.textDim,
+          fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", padding: "5px 14px", cursor: "pointer"
+        }}>
+          {sseActive ? "DISCONNECT" : "CONNECT LIVE"}
+        </button>
       </div>
 
-      {/* Diversion bar */}
-      <div style={{ marginTop: 12, padding: "8px 0 0 0", borderTop: `1px solid ${C.border}` }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 7.5, color: C.textDim, marginBottom: 4 }}>
-          <span>ρ = 0.00</span>
-          <span style={{ color: C.yellow }}>DIVERSION 0.80</span>
-          <span style={{ color: C.red }}>COLLAPSE 0.85</span>
-          <span>ρ = 1.00</span>
-        </div>
-        <div style={{ height: 6, background: C.border, borderRadius: 3, position: "relative" }}>
-          <div style={{ height: "100%", width: `${Math.min(globalRho * 100, 100)}%`, background: `linear-gradient(90deg, ${C.green} 0%, ${C.yellow} 75%, ${C.red} 100%)`, borderRadius: 3, transition: "width 0.8s" }} />
-          <div style={{ position: "absolute", left: "80%", top: 0, bottom: 0, width: 1.5, background: C.yellow }} />
-          <div style={{ position: "absolute", left: "85%", top: 0, bottom: 0, width: 1.5, background: C.red }} />
-        </div>
-        <div style={{ fontSize: 7.5, color: C.textDim, marginTop: 4, fontFamily: "'JetBrains Mono', monospace" }}>
-          ρ = {globalRho.toFixed(4)} · λ_total = {totalLambda.toFixed(1)}/hr · Σμ = {totalMu}/hr
-        </div>
+      {/* API Endpoint reference */}
+      <div style={{ background: C.panel, border: `1px solid ${C.border}`, padding: "10px 12px", marginBottom: 10, fontSize: 8.5, fontFamily: "'JetBrains Mono',monospace" }}>
+        <div style={{ color: C.blue, marginBottom: 4 }}>POST {apiBase}/api/v1/intercept</div>
+        <div style={{ color: C.textDim }}>{`{"shipments":[{"id":"SHP-001","warehouse_block":"A","cost":245,"product_importance":"High"}],"config":{"mu":150}}`}</div>
+        <div style={{ marginTop: 6, color: C.green }}>→ {"{"}"status":"nominal|critical|collapse","recommended_action":"NOMINAL|MONITOR|DIVERT"{"}"}</div>
+      </div>
+
+      {/* Live event log */}
+      <div ref={logRef} style={{ height: 120, overflowY: "auto", background: C.panel, border: `1px solid ${C.border}`, padding: "6px 10px" }}>
+        {events.length === 0 ? (
+          <div style={{ fontSize: 8, color: C.textMuted, fontFamily: "'JetBrains Mono',monospace" }}>Waiting for live stream... connect your API key above.</div>
+        ) : events.map((ev, i) => (
+          <div key={i} style={{ fontSize: 8, color: ev.status === "collapse" ? C.red : ev.status === "critical" ? C.yellow : C.green, fontFamily: "'JetBrains Mono',monospace", marginBottom: 2 }}>
+            [{ev.ts}] ρ={ev.global_rho?.toFixed(4)} · STATUS={ev.status?.toUpperCase()} · ACTION={ev.recommended_action}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+        {[
+          { label: "ENDPOINT", val: "/api/v1/intercept", color: C.blue },
+          { label: "AUTH", val: "Bearer Token", color: C.gold },
+          { label: "RATE LIMIT", val: "1000 req/min", color: C.green },
+        ].map(item => (
+          <div key={item.label} style={{ background: C.panel, border: `1px solid ${C.border}`, padding: "6px 8px" }}>
+            <div style={{ fontSize: 7, color: C.textDim }}>{item.label}</div>
+            <div style={{ fontSize: 9, color: item.color, fontWeight: 700 }}>{item.val}</div>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-// ─── WHATSAPP PANEL ───────────────────────────────────────────────────────────
-function WhatsAppPanel({ hubs, globalRho }) {
-  const critHub = hubs.find(h => h.rho >= 0.80);
-  const time = new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+// ─── DATA INJECTION PANEL ─────────────────────────────────────────────────────
+function DataInjectionPanel({ onRefresh, kState, ticker, mu, setMu, isStreaming, setIsStreaming, isGhostMode, setIsGhostMode, onCalibrating }) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
+  const fileRef = useRef(null);
+  const streamRef = useRef(null);
+  const ghostRef = useRef(null);
+  const ghostCountRef = useRef(0);
 
-  const msg = critHub
-    ? `[WARNING] Hub ${critHub.name} at ${(critHub.rho * 100).toFixed(1)}%.\nPredicted backlog: +50 units.\nActions: Divert inbound shipments immediately.\nWindow closes in 45m.\n\nNetwork load: ${(globalRho * 100).toFixed(0)}% arrivals vs ${critHub.mu}/hr capacity.\n\nAt current rate, hub ${critHub.name} hits collapse threshold in ~25m.\n\n– SITI Intelligence | ${time} | Alert #0001\nNext alert suppressed 30m`
-    : `[STABLE] All ${hubs.length} hubs nominal.\nNetwork ρ = ${(globalRho * 100).toFixed(1)}%.\nNo immediate action required.\n\nMIMI Kernel monitoring active.\n– SITI Intelligence | ${time}`;
+  const doUpload = async (file) => {
+    onCalibrating(true);
+    setUploadMsg(null); setUploadError(null);
+    try {
+      const rawText = await readFileResilient(file);
+      const cleanText = sanitizeText(rawText);
+      const remapped = preprocessCSV(cleanText);
+      const blob = new Blob([remapped], { type: "text/csv" });
+      const processed = new File([blob], file.name, { type: "text/csv" });
+      const fd = new FormData();
+      fd.append("file", processed);
+      const [res] = await Promise.all([
+        axios.post(`${API}/kernel/upload`, fd, { headers: { "Content-Type": "multipart/form-data" } }),
+        new Promise(r => setTimeout(r, 2800)),
+      ]);
+      setUploadMsg(`GENIUS RESET COMPLETE — ${res.data.message}`);
+      await onRefresh();
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      setUploadError(typeof detail === "string" ? detail : "Upload failed — check CSV format");
+    } finally {
+      onCalibrating(false);
+    }
+  };
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    await doUpload(file);
+    setUploading(false);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const startStream = () => {
+    setIsStreaming(true);
+    streamRef.current = setInterval(async () => {
+      await axios.post(`${API}/kernel/stream-batch?n=100`);
+      await onRefresh();
+    }, 10000);
+  };
+  const stopStream = () => { clearInterval(streamRef.current); setIsStreaming(false); };
+
+  const startGhost = () => {
+    setIsGhostMode(true);
+    ghostCountRef.current = 0;
+    ghostRef.current = setInterval(async () => {
+      await axios.post(`${API}/kernel/stream-batch?n=50`);
+      await onRefresh();
+      ghostCountRef.current++;
+      if (ghostCountRef.current >= 90) stopGhost();
+    }, 1000);
+  };
+  const stopGhost = () => { clearInterval(ghostRef.current); setIsGhostMode(false); ghostCountRef.current = 0; };
+
+  const handleMuChange = async (val) => {
+    setMu(val);
+    try { await axios.post(`${API}/kernel/set-mu`, { mu: val }); await onRefresh(); } catch {}
+  };
+
+  const exportPDF = () => {
+    const doc = new jsPDF({ orientation: "portrait", format: "a4" });
+    const now = new Date().toISOString();
+    const rho = kState?.rho ?? 0;
+    const phi = kState?.phi ?? 0;
+    const irp = kState?.inverse_reliability ?? {};
+
+    doc.setFillColor(5, 5, 5);
+    doc.rect(0, 0, 210, 45, "F");
+    doc.setFillColor(255, 179, 64);
+    doc.rect(0, 0, 5, 45, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(255, 179, 64);
+    doc.setFontSize(18);
+    doc.text("SITI INTELLIGENCE", 12, 14);
+    doc.setFontSize(9);
+    doc.setTextColor(200, 200, 200);
+    doc.text("FORENSIC STATE AUDIT [Case #02028317]", 12, 22);
+    doc.text(`GENERATED: ${now}`, 12, 30);
+    doc.text(`DATASET: ${kState?.dataset_name ?? "SAFEXPRESS_CASE_02028317"}`, 12, 37);
+    doc.setTextColor(255, 59, 48);
+    doc.text(rho >= 0.85 ? "STATUS: UTILIZATION COLLAPSE — SIGMOIDAL DECAY TRIGGERED" : rho > 0.80 ? "STATUS: PREEMPTIVE DIVERSION PROTOCOL INITIATED" : "STATUS: NOMINAL OPERATIONS", 12, 43);
+
+    doc.setTextColor(255, 179, 64);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text("EXECUTIVE SUMMARY", 14, 58);
+    autoTable(doc, {
+      startY: 62,
+      head: [["METRIC", "VALUE", "STATUS"]],
+      body: [
+        ["Hub Utilization (ρ)", rho.toFixed(4), rho > 0.80 ? "CRITICAL" : "NOMINAL"],
+        ["Instability Φ(ρ)", phi.toFixed(4), phi < 0.2 ? "CRITICAL" : "STABLE"],
+        ["Annualized Exposure", "$2,810,000", "AUDIT BASELINE"],
+        ["Revenue Saved", `$${ticker?.revenue_saved?.toFixed(2) ?? "0.00"}`, "RECOVERED"],
+        ["High-Imp Failures", irp.failure_count ?? 0, "IRP CONFIRMED"],
+        ["Total Leakage", `$${irp.leakage_total?.toFixed(2) ?? "0.00"}`, "TRACKED"],
+      ],
+      theme: "grid",
+      headStyles: { fillColor: [10,10,10], textColor: [255,179,64], fontSize: 8, fontStyle: "bold" },
+      bodyStyles: { fillColor: [15,15,15], textColor: [220,220,220], fontSize: 8 },
+    });
+    doc.save(`siti-forensic-audit-${Date.now()}.pdf`);
+  };
 
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.border}`, height: "100%", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.1em" }}>WHATSAPP ALERT SYSTEM</div>
-        <div style={{ fontSize: 8, color: C.green, border: `1px solid ${C.greenDim}`, padding: "1px 6px", fontWeight: 700 }}>MONITORING</div>
-      </div>
-      <div style={{ flex: 1, padding: "10px 12px", display: "flex", flexDirection: "column", alignItems: "center" }}>
-        {/* Phone */}
-        <div style={{ background: "#111", borderRadius: 16, padding: 10, border: `1px solid #1F1F1F`, width: "100%", maxWidth: 210 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 7, color: "#555", marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>
-            <span>{time}</span><span>●●● Jio 4G ■ 87%</span>
+    <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: "14px 16px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+        {/* Col 1: CSV Upload */}
+        <div>
+          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.15em", marginBottom: 8, fontWeight: 700 }}>DATA INJECTION — GENIUS RESET</div>
+          <div style={{ fontSize: 8.5, color: C.textDim, marginBottom: 10, lineHeight: 1.6 }}>
+            Upload your logistics CSV. MIMI Kernel wipes history, runs logistic regression, recalculates ρ_critical. Auto-maps messy headers.
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid #1A1A1A` }}>
-            <div style={{ width: 22, height: 22, borderRadius: "50%", background: `${C.gold}22`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: C.gold, fontWeight: 700 }}>SI</div>
-            <div>
-              <div style={{ fontSize: 9, color: "#E0E0E0", fontWeight: 600 }}>SITI Intelligence</div>
-              <div style={{ fontSize: 7, color: "#555" }}>Ops Alert System · sent ✓✓</div>
-            </div>
-          </div>
-          <div style={{ textAlign: "center", fontSize: 7, color: "#333", marginBottom: 6 }}>TODAY</div>
-          <div style={{
-            background: critHub ? "#1A0800" : "#0A1A0A",
-            borderRadius: "8px 8px 0 8px", padding: "7px 9px",
-            fontSize: 7.5, color: critHub ? "#B0C4B0" : "#90C090",
-            fontFamily: "'Inter', sans-serif", lineHeight: 1.6,
-            border: `1px solid ${critHub ? C.redDim : C.greenDim}`,
+          <input ref={fileRef} type="file" accept=".csv" onChange={handleUpload} style={{ display: "none" }} id="siti-csv-upload" />
+          <label htmlFor="siti-csv-upload" style={{
+            display: "inline-block", background: uploading ? "#1A1A00" : "#1A0A00", border: `1px solid ${uploading ? C.gold : "#FF9F0A"}`,
+            color: uploading ? C.gold : "#FF9F0A", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 700,
+            letterSpacing: "0.12em", padding: "7px 16px", cursor: uploading ? "wait" : "pointer", userSelect: "none"
           }}>
-            {msg.split("\n").map((line, i) => (
-              <div key={i} style={{
-                color: line.startsWith("[WARNING]") ? C.yellow : line.startsWith("[STABLE]") ? C.green : line.startsWith("–") ? "#555" : "#999",
-                fontWeight: line.startsWith("[") ? 700 : 400,
-              }}>{line || "\u00A0"}</div>
+            {uploading ? "PROCESSING..." : "⬆ UPLOAD CSV — GENIUS RESET"}
+          </label>
+          <div style={{ marginTop: 8, fontSize: 7.5, color: C.textDim, lineHeight: 1.8 }}>
+            {["delay_status → Reached.on.Time_Y.N","wt → Weight_in_gms","block → Warehouse_block","priority → Product_importance"].map(m => (
+              <div key={m}><span style={{ color: C.green }}>›</span> {m}</div>
+            ))}
+          </div>
+          {uploadMsg && <div style={{ marginTop: 8, padding: "6px 10px", background: "#001A00", border: `1px solid ${C.green}`, color: C.green, fontSize: 8.5 }}>{uploadMsg}</div>}
+          {uploadError && <div style={{ marginTop: 8, padding: "6px 10px", background: "#1A0000", border: `1px solid ${C.red}`, color: C.red, fontSize: 8.5 }}>ERROR: {uploadError}</div>}
+        </div>
+
+        {/* Col 2: PDF Export */}
+        <div>
+          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.15em", marginBottom: 8, fontWeight: 700 }}>FORENSIC AUDIT EXPORT</div>
+          <div style={{ fontSize: 8.5, color: C.textDim, marginBottom: 10, lineHeight: 1.6 }}>
+            Board-ready PDF: Forensic State Audit — MIMI Kernel analysis, IRP findings, Mission LiFE ESG certification.
+          </div>
+          <button onClick={exportPDF} style={{
+            background: "#000D1A", border: `1px solid ${C.blue}`, color: C.blue, fontFamily: "'JetBrains Mono',monospace",
+            fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", padding: "7px 16px", cursor: "pointer"
+          }}>
+            📄 EXPORT FORENSIC AUDIT PDF
+          </button>
+          <div style={{ marginTop: 10, padding: 8, background: C.panel, border: `1px solid ${C.border}`, fontSize: 8, color: C.textDim, lineHeight: 1.8 }}>
+            {["Executive KPI Summary", "MIMI Kernel Formulation", "IRP Table (Top 15 failures)", "Kalman Filter State Analysis", "Mission LiFE ESG Tag"].map(item => (
+              <div key={item}><span style={{ color: C.green }}>✓</span> {item}</div>
             ))}
           </div>
         </div>
 
-        {/* Alert stats */}
-        <div style={{ marginTop: 10, width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-          {[
-            { label: "ALERTS TODAY", val: hubs.filter(h => h.rho > 0.75).length, color: C.yellow },
-            { label: "MSGS SENT", val: 3, color: C.green },
-            { label: "AVG LATENCY", val: "0.13ms", color: C.blue },
-            { label: "SUPPRESSED", val: 2, color: C.textDim },
-          ].map(item => (
-            <div key={item.label} style={{ background: C.surface, border: `1px solid ${C.border}`, padding: "5px 7px" }}>
-              <div style={{ fontSize: 7, color: C.textDim }}>{item.label}</div>
-              <div style={{ fontSize: 11, color: item.color, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{item.val}</div>
+        {/* Col 3: μ Control + Streams */}
+        <div>
+          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.15em", marginBottom: 8, fontWeight: 700 }}>SERVICE CAPACITY (μ) CONTROL</div>
+          <div style={{ fontSize: 8.5, color: C.textDim, marginBottom: 10, lineHeight: 1.6 }}>Adjust μ per hub. ρ = λ/μ recalculates instantly across all 5 hubs.</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            <input type="range" min={50} max={500} step={5} value={mu} onChange={e => handleMuChange(Number(e.target.value))}
+              style={{ flex: 1, accentColor: C.green, cursor: "pointer" }} />
+            <div style={{ background: C.panel, border: `1px solid ${C.green}`, padding: "4px 10px", fontFamily: "'JetBrains Mono',monospace", fontSize: 13, color: C.green, minWidth: 80, textAlign: "center" }}>
+              μ={mu}
             </div>
-          ))}
+          </div>
+          <div style={{ fontSize: 8, color: C.textDim, marginBottom: 12 }}>
+            Network capacity: <span style={{ color: C.green }}>{mu * 5} units/hr</span> across 5 hubs
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <button onClick={isStreaming ? stopStream : startStream} disabled={isGhostMode} style={{
+              flex: 1, background: isStreaming ? "#001A0A" : C.panel, border: `1px solid ${isStreaming ? C.green : C.borderBright}`,
+              color: isStreaming ? C.green : C.textDim, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700,
+              letterSpacing: "0.1em", padding: "6px 0", cursor: isGhostMode ? "not-allowed" : "pointer", opacity: isGhostMode ? 0.4 : 1
+            }}>
+              {isStreaming ? "● HALT STREAM" : "LIVE STREAM"}
+            </button>
+            <button onClick={isGhostMode ? stopGhost : startGhost} disabled={isStreaming} style={{
+              flex: 1, background: isGhostMode ? "#001A05" : C.panel, border: `1px solid ${isGhostMode ? C.neonGreen : C.borderBright}`,
+              color: isGhostMode ? C.neonGreen : C.textDim, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700,
+              letterSpacing: "0.1em", padding: "6px 0", cursor: isStreaming ? "not-allowed" : "pointer", opacity: isStreaming ? 0.4 : 1
+            }}>
+              {isGhostMode ? "● HALT GHOST" : "GHOST TRIGGER"}
+            </button>
+          </div>
+          <div style={{ fontSize: 7.5, color: C.textDim }}>Stream: 100 units/10s · Ghost: 50 units/s (90s auto-stop)</div>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ─── COMMANDER CONSOLE ────────────────────────────────────────────────────────
-function CommanderConsole({ hubs, globalRho, revenueSaved, isConnected }) {
-  const isCollapse = globalRho >= 0.85;
-  const isCritical = globalRho >= 0.75;
-  const level = isCollapse ? "critical" : isCritical ? "warning" : "nominal";
-  const colors = { critical: C.red, warning: C.yellow, nominal: C.green };
-  const bgs = { critical: "#0D0000", warning: "#0D0900", nominal: "#001A05" };
-  const msgs = {
-    critical: `NETWORK COLLAPSE IMMINENT. Sigmoidal decay triggered at ρ=${globalRho.toFixed(3)}. All hubs in cascade diversion. Immediate intervention required.`,
-    warning: `Elevated network utilization detected. ${hubs.filter(h => h.rho > 0.75).map(h => h.name).join(", ")} approaching critical threshold. Monitor closely.`,
-    nominal: `MIMI Kernel: Optimal network flow detected. Certainty ${(99 - globalRho * 10).toFixed(1)}%. All systems within safe operating parameters.`,
-  };
-
-  return (
-    <div style={{ background: bgs[level], border: `1px solid ${colors[level]}33`, padding: "10px 12px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-        <div style={{ fontSize: 8.5, color: C.textDim, letterSpacing: "0.12em" }}>COMMANDER'S INTELLIGENCE CONSOLE</div>
-        <div style={{ fontSize: 8, color: colors[level], fontWeight: 700, letterSpacing: "0.08em" }}>{level.toUpperCase()}</div>
-      </div>
-      <div style={{ fontSize: 9, color: colors[level], fontWeight: 600, lineHeight: 1.5, marginBottom: 10 }}>{msgs[level]}</div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, padding: "6px 8px" }}>
-          <div style={{ fontSize: 7, color: C.textDim }}>T+3 PROJECTION</div>
-          <div style={{ fontSize: 13, color: globalRho > 0.85 ? C.red : C.gold, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
-            ρ={((hubs[0]?.rho_t3 || globalRho + 0.01)).toFixed(4)}
-          </div>
-        </div>
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, padding: "6px 8px" }}>
-          <div style={{ fontSize: 7, color: C.textDim }}>PVI VOLATILITY</div>
-          <div style={{ fontSize: 13, color: C.blue, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
-            {(globalRho * 0.8).toFixed(1)}%
-          </div>
-        </div>
-        <div style={{ background: C.surface, border: `1px solid ${C.border}`, padding: "6px 8px" }}>
-          <div style={{ fontSize: 7, color: C.textDim }}>REVENUE SAVED</div>
-          <div style={{ fontSize: 13, color: C.green, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
-            ₹{(49.2 + Math.random() * 0.5).toFixed(1)}L
-          </div>
-        </div>
-      </div>
-
-      {!isConnected && (
-        <div style={{ marginTop: 10, padding: "7px 10px", background: `${C.blue}11`, border: `1px solid ${C.blueDim}`, fontSize: 8, color: C.blue, lineHeight: 1.6 }}>
-          💡 Connect your API key or upload a logistics CSV to see live hub data, real IRP calculations, and live Twilio WhatsApp alerts.
-        </div>
-      )}
     </div>
   );
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function SITIDashboard() {
-  const { hubs, globalRho, totalLambda, criticalHub, isConnected, history, tick } = useSimulation(null);
+  const [kState, setKState] = useState(null);
+  const [ticker, setTicker] = useState({ revenue_saved: 0, total_diverted: 0, refresh_count: 0 });
+  const [loading, setLoading] = useState(true);
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const [showPayment, setShowPayment] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
+  const [mu, setMu] = useState(150);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isGhostMode, setIsGhostMode] = useState(false);
 
-  const tabs = [
-    { id: "overview", label: "NETWORK OVERVIEW" },
-    { id: "kernel", label: "MIMI KERNEL" },
-    { id: "analytics", label: "ANALYTICS" },
-  ];
+  const fetchState = useCallback(async () => {
+    try {
+      const [stateRes, tickRes] = await Promise.all([
+        axios.get(`${API}/kernel/state`),
+        axios.post(`${API}/kernel/tick`),
+      ]);
+      setKState(stateRes.data);
+      setTicker(tickRes.data);
+      setLoading(false);
+    } catch (err) {
+      console.error("API fetch failed:", err);
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchState();
+    const interval = setInterval(fetchState, 5000);
+    return () => clearInterval(interval);
+  }, [fetchState]);
+
+  const hubs = kState?.hubs ?? [];
+  const globalRho = kState?.global_rho ?? 0;
+  const catastrophe = kState?.catastrophe;
+  const collapse = kState?.collapse;
+  const isConnected = !!kState;
+  const statusColor = collapse ? C.red : catastrophe ? C.yellow : C.green;
+  const bgColor = collapse ? "#140000" : catastrophe ? "#0D0000" : C.bg;
+
+  if (loading && !kState) {
+    return (
+      <div style={{ background: C.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16 }}>
+        <SitiLogo size={52} />
+        <div style={{ color: C.gold, fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 18, letterSpacing: "0.2em" }}>SITI INTELLIGENCE</div>
+        <div style={{ color: C.textDim, fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: "0.12em" }}>CONNECTING TO MIMI KERNEL...</div>
+        <div style={{ fontSize: 9, color: C.textMuted }}>{API}</div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "'JetBrains Mono', monospace", color: C.text, fontSize: 12 }}>
+    <div style={{ background: bgColor, minHeight: "100vh", fontFamily: "'JetBrains Mono',monospace", color: C.text, fontSize: 12, transition: "background 0.5s" }}>
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
         ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: ${C.bg}; } ::-webkit-scrollbar-thumb { background: ${C.border}; }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-        @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes tickerScroll { from{transform:translateX(0)} to{transform:translateX(-50%)} }
-        @import url('https://fonts.googleapis.com/css2?family=Chivo:wght@700;900&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Chivo:wght@700;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+        input[type=range]{-webkit-appearance:none;height:4px;background:${C.border};border-radius:2px;outline:none}
+        input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;background:${C.green};border-radius:50%;cursor:pointer}
       `}</style>
 
-      <TopBar globalRho={globalRho} criticalHub={criticalHub} isConnected={isConnected} totalLambda={totalLambda} tick={tick} />
-      <Ticker hubs={hubs} globalRho={globalRho} />
-      <WarningBanner criticalHub={criticalHub} isConnected={isConnected} />
-      <KPIRow hubs={hubs} globalRho={globalRho} totalLambda={totalLambda} />
+      {isCalibrating && <CalibrationOverlay />}
+      {showPayment && <PaymentModal onClose={() => setShowPayment(false)} />}
+      {collapse && <div style={{ position: "fixed", inset: 0, border: `3px solid ${C.red}`, pointerEvents: "none", zIndex: 9997, animation: "blink 2s step-end infinite" }} />}
 
-      {/* Tab bar */}
-      <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
-        {tabs.map(tab => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
-            padding: "9px 20px", fontSize: 8.5, letterSpacing: "0.1em", fontFamily: "'JetBrains Mono', monospace",
-            background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.gold : C.textDim,
-            borderBottom: `2px solid ${activeTab === tab.id ? C.gold : "transparent"}`,
-            transition: "all 0.2s",
-          }}>{tab.label}</button>
-        ))}
+      {/* TOP BAR */}
+      <div style={{ background: C.surface, borderBottom: `1px solid ${collapse ? C.red + "44" : C.border}`, padding: "0 16px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 54, position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <SitiLogo size={34} />
+          <div>
+            <div style={{ fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 14, color: C.gold, letterSpacing: "0.2em" }}>SITI INTELLIGENCE</div>
+            <div style={{ fontSize: 8, color: C.textDim, letterSpacing: "0.1em" }}>LOGIC FOR THE PARADOX // POWERED BY MIMI v2.0</div>
+          </div>
+          <div style={{ width: 1, height: 28, background: C.border, margin: "0 8px" }} />
+          <div style={{ fontSize: 9, color: C.blue, letterSpacing: "0.1em" }}>CASE #02028317</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
+          {(isGhostMode || isStreaming) && (
+            <div style={{ background: "#001A05", border: `1px solid ${C.neonGreen}`, color: C.neonGreen, fontSize: 9, fontWeight: 700, letterSpacing: "0.15em", padding: "3px 10px", display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.neonGreen, animation: "pulse 0.75s ease-in-out infinite" }} />
+              LIVE INFERENCE
+            </div>
+          )}
+          {[
+            { label: "NETWORK ρ", val: globalRho.toFixed(3), color: statusColor },
+            { label: "λ TOTAL/HR", val: kState?.total_lambda?.toFixed(0) ?? "—", color: C.blue },
+            { label: "SAVED", val: `$${ticker.revenue_saved?.toFixed(2)}`, color: C.green },
+            { label: "EXPOSURE", val: "$2,810,000", color: C.red },
+            { label: "API", val: isConnected ? "ONLINE" : "OFFLINE", color: isConnected ? C.green : C.red },
+          ].map(item => (
+            <div key={item.label} style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 7, color: C.textDim, letterSpacing: "0.1em", marginBottom: 2 }}>{item.label}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: item.color, fontFamily: "'JetBrains Mono',monospace" }}>{item.val}</div>
+            </div>
+          ))}
+          <button onClick={() => setShowPayment(true)} style={{ background: "#001A00", border: `1px solid ${C.green}`, color: C.green, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", padding: "5px 14px", cursor: "pointer" }}>
+            GET API KEY →
+          </button>
+        </div>
       </div>
 
-      {/* ── OVERVIEW TAB ── */}
+      {/* HERO METRIC */}
+      <div style={{ textAlign: "center", padding: "18px 16px 14px", borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ fontSize: 9, color: C.textDim, letterSpacing: "0.25em", marginBottom: 4 }}>ANNUALIZED REVENUE RECOVERY</div>
+        <div style={{ fontSize: 46, fontWeight: 900, fontFamily: "'JetBrains Mono',monospace", color: C.neonGreen, lineHeight: 1, textShadow: `0 0 20px ${C.neonGreen}44` }}>$2.81M</div>
+        <div style={{ fontSize: 8.5, color: C.textDim, marginTop: 4, letterSpacing: "0.12em" }}>MIMI KERNEL v2.0 · {hubs.length}-HUB NETWORK · 2D KALMAN STATE OBSERVER</div>
+      </div>
+
+      {/* HUB CARDS */}
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.max(hubs.length, 3)}, 1fr)`, gap: 10, padding: "10px 16px" }}>
+        {hubs.map(hub => <HubCard key={hub.name} hub={hub} criticalRho={kState?.critical_rho} />)}
+      </div>
+
+      {/* ALERTS */}
+      {collapse && (
+        <div style={{ background: "#200000", border: `2px solid ${C.red}`, padding: "12px 24px", margin: "0 16px 4px", display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.red, animation: "blink 1s infinite" }} />
+          <div style={{ color: C.red, fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 14, letterSpacing: "0.2em" }}>NETWORK COLLAPSE: SIGMOIDAL DECAY TRIGGERED</div>
+        </div>
+      )}
+      {catastrophe && !collapse && (
+        <div style={{ background: "#1A0000", border: `1px solid #FF9F0A`, padding: "8px 24px", margin: "0 16px", display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ color: "#FF9F0A", fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 12, letterSpacing: "0.15em", animation: "blink 1.5s infinite" }}>PREEMPTIVE DIVERSION PROTOCOL INITIATED</div>
+        </div>
+      )}
+      {!isConnected && (
+        <div style={{ background: "#0A0A1A", borderBottom: `1px solid ${C.blueDim}`, padding: "6px 24px", display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.blue, animation: "pulse 1.5s infinite" }} />
+          <div style={{ fontSize: 8.5, color: `${C.blue}88`, letterSpacing: "0.1em" }}>SIMULATION MODE · Upload CSV or connect API key for live data</div>
+        </div>
+      )}
+
+      {/* TAB BAR */}
+      <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, background: C.surface, margin: "8px 0 0" }}>
+        {[
+          { id: "overview", label: "NETWORK OVERVIEW" },
+          { id: "kernel", label: "MIMI KERNEL" },
+          { id: "live-api", label: "LIVE API STREAM" },
+          { id: "data", label: "DATA INJECTION" },
+        ].map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+            padding: "9px 20px", fontSize: 8.5, letterSpacing: "0.1em", fontFamily: "'JetBrains Mono',monospace",
+            background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.gold : C.textDim,
+            borderBottom: `2px solid ${activeTab === tab.id ? C.gold : "transparent"}`, transition: "all 0.2s"
+          }}>{tab.label}</button>
+        ))}
+        {/* PVI Alert badge on tab */}
+        {kState?.pvi_alert && <div style={{ margin: "auto 0 auto 8px", background: "#1A0A00", border: `1px solid #FF9F0A`, color: "#FF9F0A", fontSize: 8, fontWeight: 700, padding: "2px 8px", animation: "blink 1s infinite" }}>PVI ALERT</div>}
+      </div>
+
+      {/* OVERVIEW TAB */}
       {activeTab === "overview" && (
-        <div style={{ display: "grid", gridTemplateColumns: "260px 1fr 220px", gap: 1, background: C.border, animation: "fadeIn 0.3s ease" }}>
-          {/* LEFT: Hub list */}
-          <div style={{ background: C.bg }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 14px", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
-              <div style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.1em" }}>HUB STATUS</div>
-              {criticalHub && <div style={{ fontSize: 7.5, color: C.red, border: `1px solid ${C.redDim}`, padding: "1px 6px", fontWeight: 700 }}>1 CRITICAL</div>}
-            </div>
-            {hubs.map(hub => <HubRow key={hub.name} hub={hub} />)}
+        <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 1, background: C.border, padding: "12px 16px", gap: 12 }}>
+          {/* LEFT: KPI cards */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {[
+              { label: "NETWORK ρ (λ/μ)", val: globalRho.toFixed(4), color: collapse ? C.red : C.gold },
+              { label: "ARRIVALS λ/HR", val: `${kState?.total_lambda?.toFixed(1) ?? "—"}/hr`, color: C.blue },
+              { label: "SERVICE μ/HUB", val: `${kState?.mu?.toFixed(0) ?? mu}/hr`, color: C.green },
+              { label: "INSTABILITY Φ(ρ)", val: kState?.phi?.toFixed(4) ?? "—", color: (kState?.phi ?? 0) > 0.5 ? C.red : C.green },
+              { label: "QUEUE DEPTH W_q", val: Math.min(kState?.wq ?? 0, 99.9).toFixed(3), color: (kState?.wq ?? 0) > 4 ? C.red : C.blue },
+              { label: "DELIVERY FAIL RATE", val: `${((kState?.failure_rate ?? 0) * 100).toFixed(1)}%`, color: "#FF9F0A" },
+              { label: "HIGH-IMP FAILURES", val: `${kState?.inverse_reliability?.failure_count ?? 0}`, color: C.red },
+              { label: "LEAKAGE $3.94/UNIT", val: `$${kState?.inverse_reliability?.leakage_total?.toFixed(0) ?? 0}`, color: "#FF9F0A" },
+              { label: "REVENUE SAVED", val: `$${ticker.revenue_saved?.toFixed(2)}`, color: C.green },
+              { label: "DIVERTED UNITS", val: ticker.total_diverted?.toLocaleString(), color: C.green },
+            ].map(item => (
+              <div key={item.label} style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: "10px 12px" }}>
+                <div style={{ fontSize: 8, color: C.textDim, letterSpacing: "0.1em", marginBottom: 4 }}>{item.label}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: item.color, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1 }}>{item.val ?? "—"}</div>
+              </div>
+            ))}
           </div>
 
-          {/* CENTER: Charts */}
-          <div style={{ background: C.bg, display: "flex", flexDirection: "column", gap: 1 }}>
-            <KalmanChart history={history} hubs={hubs} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-              <HubUtilizationBar hubs={hubs} />
-              <FailurePie hubs={hubs} />
-            </div>
+          {/* RIGHT: Charts + IRP table */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <HubCharts kState={kState} />
             <IRPTable hubs={hubs} />
           </div>
-
-          {/* RIGHT: WhatsApp */}
-          <div style={{ background: C.bg }}>
-            <WhatsAppPanel hubs={hubs} globalRho={globalRho} />
-          </div>
         </div>
       )}
 
-      {/* ── KERNEL TAB ── */}
+      {/* KERNEL TAB */}
       {activeTab === "kernel" && (
-        <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, animation: "fadeIn 0.3s ease" }}>
-          <MimiKernelPanel hubs={hubs} globalRho={globalRho} />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div style={{ background: C.panel, border: `1px solid ${C.border}`, padding: 12 }}>
-              <div style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.1em", marginBottom: 10 }}>OPTIMAL KALMAN GAIN (2D)</div>
-              <div style={{ fontSize: 11, color: C.text, fontFamily: "'JetBrains Mono', monospace", marginBottom: 6 }}>K = P⁻H^T(HP⁻H^T + R)⁻¹</div>
-              <div style={{ fontSize: 10, color: C.blue, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>K = [{(0.29 + globalRho * 0.4).toFixed(4)}, {(0.05 + globalRho * 0.2).toFixed(4)}]</div>
-              <div style={{ fontSize: 7.5, color: C.textDim }}>P_trace — Q=diag(0.002,0.001) · R=0.005</div>
+        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+          <MimiPanel kState={kState} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
+              <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 10 }}>KALMAN GAIN (2D STATE)</div>
+              <div style={{ fontSize: 11, color: C.text, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>K = P⁻H^T(HP⁻H^T + R)⁻¹</div>
+              <div style={{ fontSize: 12, color: C.blue, fontFamily: "'JetBrains Mono',monospace" }}>K = [{(kState?.kalman?.K ?? [0,0]).map(v => v.toFixed(4)).join(", ")}]</div>
+              <div style={{ fontSize: 8, color: C.textDim, marginTop: 4 }}>P_trace={kState?.kalman?.P?.toFixed(4)} · Q=diag(0.002,0.001) · R=0.005</div>
             </div>
-            <div style={{ background: C.panel, border: `1px solid ${C.border}`, padding: 12 }}>
-              <div style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.1em", marginBottom: 10 }}>INVERSE RELIABILITY PARADOX — LOSS FUNCTION</div>
-              <div style={{ fontSize: 11, color: C.text, fontFamily: "'JetBrains Mono', monospace", marginBottom: 8 }}>ℒ = $1.20 + $2.74 = $3.94</div>
-              <div style={{ display: "flex", gap: 12 }}>
-                <div style={{ fontSize: 8.5, color: C.textDim }}>recovery: <span style={{ color: C.green }}>$1.20</span></div>
-                <div style={{ fontSize: 8.5, color: C.textDim }}>CLV: <span style={{ color: C.red }}>$2.74</span></div>
+            <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
+              <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 10 }}>COMMANDER'S CONSOLE</div>
+              <div style={{ fontSize: 8, color: kState?.commander_level === "critical" ? C.red : kState?.commander_level === "efficiency" ? C.blue : C.green, lineHeight: 1.8, fontWeight: 700 }}>
+                {kState?.commander_message ?? "MIMI KERNEL: OPTIMAL FLOW DETECTED."}
               </div>
-              <div style={{ fontSize: 9, color: C.gold, marginTop: 8, fontFamily: "'JetBrains Mono', monospace" }}>
-                L = ${(globalRho * 6224).toFixed(2)} · {Math.round(globalRho * 1326)} high-imp failures
+              <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div style={{ background: C.panel, padding: "5px 8px", border: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 7, color: C.textDim }}>T+3 PROJ</div>
+                  <div style={{ fontSize: 14, color: (kState?.rho_t3 ?? 0) >= 0.85 ? C.red : C.green, fontWeight: 700 }}>ρ={(kState?.rho_t3 ?? 0).toFixed(4)}</div>
+                </div>
+                <div style={{ background: C.panel, padding: "5px 8px", border: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 7, color: C.textDim }}>PVI VOLATILITY</div>
+                  <div style={{ fontSize: 14, color: (kState?.pvi ?? 0) > 15 ? C.red : C.blue, fontWeight: 700 }}>{(kState?.pvi ?? 0).toFixed(1)}%</div>
+                </div>
               </div>
             </div>
           </div>
-          <CommanderConsole hubs={hubs} globalRho={globalRho} isConnected={isConnected} />
         </div>
       )}
 
-      {/* ── ANALYTICS TAB ── */}
-      {activeTab === "analytics" && (
-        <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, animation: "fadeIn 0.3s ease" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <HubUtilizationBar hubs={hubs} />
-            <FailurePie hubs={hubs} />
-          </div>
-          <KalmanChart history={history} hubs={hubs} />
-          <IRPTable hubs={hubs} />
-          {/* Revenue recovery bar */}
-          <div style={{ background: C.panel, border: `1px solid ${C.border}`, padding: 14 }}>
-            <div style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.12em", marginBottom: 10 }}>ANNUALIZED REVENUE RECOVERY · MIMI KERNEL PROJECTION</div>
-            <div style={{ textAlign: "center", marginBottom: 4 }}>
-              <div style={{ fontSize: 8.5, color: C.textDim, letterSpacing: "0.15em", marginBottom: 6 }}>ANNUALIZED REVENUE RECOVERY</div>
-              <div style={{ fontFamily: "'Chivo', sans-serif", fontWeight: 900, fontSize: 42, color: C.green, letterSpacing: "0.05em" }}>₹{(globalRho * 42.5).toFixed(1)}Cr</div>
-              <div style={{ fontSize: 8, color: C.textDim, marginTop: 4 }}>MIMI KERNEL v2.0 · {hubs.length}-HUB NETWORK · 2D KALMAN STATE OBSERVER</div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginTop: 12 }}>
-              {hubs.map(h => (
-                <div key={h.name} style={{ background: C.surface, border: `1px solid ${C.border}`, padding: "8px 10px", textAlign: "center" }}>
-                  <div style={{ fontSize: 7.5, color: h.color, fontWeight: 700, marginBottom: 4 }}>{h.name}</div>
-                  <div style={{ fontSize: 14, color: C.green, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>₹{(h.rho * 8.5).toFixed(1)}Cr</div>
-                  <div style={{ fontSize: 7, color: C.textDim, marginTop: 2 }}>IRP recovery/yr</div>
-                </div>
-              ))}
-            </div>
-          </div>
+      {/* LIVE API TAB */}
+      {activeTab === "live-api" && (
+        <div style={{ padding: 16 }}>
+          <LiveAPIPanel apiBase={API_BASE} />
+        </div>
+      )}
+
+      {/* DATA INJECTION TAB */}
+      {activeTab === "data" && (
+        <div style={{ padding: 16 }}>
+          <DataInjectionPanel
+            onRefresh={fetchState}
+            kState={kState}
+            ticker={ticker}
+            mu={mu}
+            setMu={setMu}
+            isStreaming={isStreaming}
+            setIsStreaming={setIsStreaming}
+            isGhostMode={isGhostMode}
+            setIsGhostMode={setIsGhostMode}
+            onCalibrating={setIsCalibrating}
+          />
         </div>
       )}
     </div>
