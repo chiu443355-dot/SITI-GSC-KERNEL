@@ -332,7 +332,8 @@ function HubCharts({ kState }) {
 }
 
 // ─── IRP TABLE ────────────────────────────────────────────────────────────────
-function IRPTable({ hubs }) {
+function IRPTable({ kState }) {
+  const perHub = kState?.inverse_reliability_per_hub ?? [];
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.borderBright}` }}>
       <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
@@ -346,20 +347,20 @@ function IRPTable({ hubs }) {
           ))}</tr>
         </thead>
         <tbody>
-          {hubs.map(hub => {
-            const r = hub.rho ?? 0;
-            const hi = (r * 18.5).toFixed(2);
-            const lo = (r * 10.2).toFixed(2);
-            const gap = (r * 8.3).toFixed(1);
-            const cr = (r * 6.8).toFixed(1);
+          {perHub.map(row => {
+            const rho = row.rho ?? 0;
+            const hiRate = ((row.hi_fail_rate ?? 0) * 100).toFixed(2);
+            const loRate = ((row.lo_fail_rate ?? 0) * 100).toFixed(2);
+            const gap = ((row.irp_gap ?? 0) * 100).toFixed(1);
+            const impact = (row.annual_impact_cr ?? 0).toFixed(2);
             return (
-              <tr key={hub.name} style={{ borderBottom: `1px solid ${C.border}` }}>
-                <td style={{ padding: "7px 10px", color: C.gold, fontWeight: 700 }}>{hub.name}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: r >= 0.85 ? C.red : C.text }}>{r.toFixed(4)}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: C.red }}>{hi}%</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: C.blue }}>{lo}%</td>
+              <tr key={row.hub} style={{ borderBottom: `1px solid ${C.border}` }}>
+                <td style={{ padding: "7px 10px", color: C.gold, fontWeight: 700 }}>{row.hub}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: rho >= 0.85 ? C.red : C.text }}>{rho.toFixed(4)}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: C.red }}>{hiRate}%</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: C.blue }}>{loRate}%</td>
                 <td style={{ padding: "7px 10px", textAlign: "right", color: C.yellow, fontWeight: 700 }}>+{gap}pp</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: C.green }}>₹{cr}Cr</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: C.green }}>₹{impact}Cr</td>
               </tr>
             );
           })}
@@ -847,7 +848,7 @@ export default function SITIDashboard() {
           {/* RIGHT: Charts + IRP table */}
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <HubCharts kState={kState} />
-            <IRPTable hubs={hubs} />
+            <IRPTable kState={kState} />
           </div>
         </div>
       )}
