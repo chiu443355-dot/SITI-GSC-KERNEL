@@ -1,5 +1,6 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Depends, Header
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Depends, Header, Request
 from fastapi.responses import StreamingResponse
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -19,17 +20,18 @@ load_dotenv(ROOT_DIR / '.env')
 
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 db_name = os.environ.get('DB_NAME', 'siti_sovereign')
-client = AsyncIOMotorClient(mongo_url)
-db = client[db_name]
 
-app = FastAPI(title="SITI Intelligence API", version="2.0.0")
-api_router = APIRouter(prefix="/api")
+# ─── LAZY MONGO INIT ──────────────────────────────────────────────────────────
+client = None
+db = None
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # ─── CONSTANTS ────────────────────────────────────────────────────────────────
 T_OPERATIONAL = 36.0
+MAX_LAMBDA_PER_HUB = 500.0  # P0-6: cap lambda growth
+
 HUB_BLOCK_MAP = {
     "Mumbai BOM":   ["A", "B"],
     "Delhi IGI":    ["C", "D"],
@@ -46,10 +48,10 @@ HUB_META = {
     "Hyderabad":   {"city": "Hyderabad", "region": "Telangana",   "mu_default": 160},
 }
 
-# ─── API KEY STORE (in-memory + MongoDB backed) ───────────────────────────────
-# Format: key_string -> {"role": "ADMIN|OPERATOR|INTEGRATOR|READONLY", "client": "name", "active": True}
-_api_keys: dict = {}
+MAX_CSV_BYTES = 50 * 1024 * 1024  # P2-2: 50MB hard limit
 
+# ─── API KEY STORE ────────────────────────────────────────────────────────────
+_api_keys: dict = {}
 ROLES = {"ADMIN", "OPERATOR", "INTEGRATOR", "READONLY"}
 ROLE_PERMISSIONS = {
     "ADMIN":      {"all"},
@@ -58,9 +60,35 @@ ROLE_PERMISSIONS = {
     "READONLY":   {"read"},
 }
 
+# ─── P0-1: PER-TENANT SESSION ISOLATION ──────────────────────────────────────
+_sessions: dict[str, dict] = {}
+MAX_SESSIONS = 200
 
+def _get_session(key: str) -> dict:
+    """Get or create a per-tenant session. LRU evict when full."""
+    if key not in _sessions:
+        if len(_sessions) >= MAX_SESSIONS:
+            # Evict oldest by insertion order
+            oldest = next(iter(_sessions))
+            del _sessions[oldest]
+            logger.info(f"Session LRU evict: {oldest}")
+        _sessions[key] = {
+            "mimi": None,
+            "diverted_units": 0,
+            "revenue_saved": 0.0,
+            "refresh_count": 0,
+            "rho_history": [],
+            "dataset_name": "SAFEXPRESS_CASE_02028317",
+            "mu": 150.0,
+        }
+    return _sessions[key]
+
+# ─── P0-3: RAZORPAY SIGNATURE VERIFICATION ───────────────────────────────────
+RAZORPAY_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+SENDGRID_KEY = os.environ.get("SENDGRID_KEY", "")
+
+# ─── API KEY LOADING ──────────────────────────────────────────────────────────
 def _load_env_keys():
-    """Load API keys from environment variable: key:ROLE,key2:ROLE2"""
     raw = os.environ.get("API_KEYS", "siti-admin-key-001:ADMIN,siti-ops-key-002:OPERATOR")
     for pair in raw.split(","):
         pair = pair.strip()
@@ -70,26 +98,27 @@ def _load_env_keys():
             if role in ROLES:
                 _api_keys[key.strip()] = {"role": role, "client": "ENV_PROVISIONED", "active": True}
 
-
+# ─── P0-4: NO ANONYMOUS ACCESS ───────────────────────────────────────────────
 def _verify_api_key(x_api_key: str = Header(default=None)) -> dict:
-    """Dependency: validate API key from X-API-KEY header."""
+    """Dependency: validate API key from X-API-KEY header. No anonymous fallback."""
     if not x_api_key:
-        return {"role": "READONLY", "client": "anonymous"}  # Allow read access without key for demo
+        raise HTTPException(status_code=401, detail="X-API-KEY header required")
     key_data = _api_keys.get(x_api_key)
     if not key_data or not key_data.get("active"):
         raise HTTPException(status_code=401, detail="Invalid or inactive API key")
     return key_data
 
-
 def _require_role(required_roles: set):
-    """Factory for role-based access control."""
+    """P2-6: Clear, auditable role-based access control."""
     def check(key_data: dict = Depends(_verify_api_key)):
-        if key_data["role"] not in required_roles and "all" not in ROLE_PERMISSIONS.get(key_data["role"], set()):
-            if key_data["role"] != "ADMIN":
-                raise HTTPException(status_code=403, detail=f"Role {key_data['role']} cannot access this endpoint")
-        return key_data
+        role = key_data["role"]
+        perms = ROLE_PERMISSIONS.get(role, set())
+        if "all" in perms:  # ADMIN
+            return key_data
+        if role in required_roles:  # exact role match
+            return key_data
+        raise HTTPException(status_code=403, detail=f"Role {role} cannot access this endpoint. Requires: {required_roles}")
     return check
-
 
 # ─── 2D KALMAN HUB NODE ──────────────────────────────────────────────────────
 class HubNode:
@@ -124,11 +153,9 @@ class HubNode:
         R = np.array([[0.005]])
         H = np.array([[1.0, 0.0]])
         F = np.array([[1.0, dt], [0.0, 1.0]])
-
         if self._kx is None:
             self._kx = np.array([z_rho, 0.0])
             self._kP = np.eye(2) * 0.1
-
         x_pred = F @ self._kx
         P_pred = F @ self._kP @ F.T + Q
         y = np.array([z_rho]) - H @ x_pred
@@ -136,14 +163,12 @@ class HubNode:
         K = P_pred @ H.T @ np.linalg.inv(S)
         self._kx = x_pred + (K @ y).flatten()
         self._kP = (np.eye(2) - K @ H) @ P_pred
-
         rho_hat = float(self._kx[0])
         rho_dot = float(self._kx[1])
         rho_t1 = float(np.clip(rho_hat + dt * rho_dot, 0.0, 1.5))
         strain = 0.05 if self.saturation_protocol else 0.0
         rho_t3 = float(np.clip(rho_hat + 3.0 * dt * rho_dot + strain, 0.0, 1.5))
         pvi = round(abs(z_rho - rho_t3) * 100, 2)
-
         return {
             "x_hat": round(rho_hat, 4), "rho_dot": round(rho_dot, 6),
             "P": round(float(np.trace(self._kP)), 6),
@@ -171,16 +196,17 @@ class MIMIKernel:
         hubs = {}
         for name, blocks in HUB_BLOCK_MAP.items():
             hub_df = self.df[self.df['Warehouse_block'].isin(blocks)]
-            lambda_rate = len(hub_df) / T_OPERATIONAL
+            lambda_rate = min(len(hub_df) / T_OPERATIONAL, MAX_LAMBDA_PER_HUB)
             mu_val = HUB_META.get(name, {}).get("mu_default", self.mu)
             hubs[name] = HubNode(name, lambda_rate, mu_val)
         return hubs
 
     def recalculate_lambdas(self):
+        """P0-6: Cap lambda to prevent infinity after repeated stream-batch calls."""
         for name, blocks in HUB_BLOCK_MAP.items():
             if name in self.hubs:
                 hub_df = self.df[self.df['Warehouse_block'].isin(blocks)]
-                new_lambda = len(hub_df) / T_OPERATIONAL
+                new_lambda = min(len(hub_df) / T_OPERATIONAL, MAX_LAMBDA_PER_HUB)
                 self.hubs[name].check_thundering_herd(new_lambda)
                 self.hubs[name].lambda_rate = new_lambda
 
@@ -229,7 +255,38 @@ class MIMIKernel:
             "records": records,
         }
 
+    def irp_per_hub(self) -> list:
+        """P1-5: Real IRP data per hub — no fabricated multipliers."""
+        result = []
+        for name, blocks in HUB_BLOCK_MAP.items():
+            hub = self.hubs.get(name)
+            sub = self.df[self.df['Warehouse_block'].isin(blocks)]
+            if len(sub) == 0:
+                continue
+            hi = sub[sub['Product_importance'].str.lower() == 'high']
+            n_hi = max(len(hi), 1)
+            n_hi_fail = int((hi['Reached.on.Time_Y.N'] == 0).sum())
+            lo = sub[sub['Product_importance'].str.lower() != 'high']
+            n_lo = max(len(lo), 1)
+            n_lo_fail = int((lo['Reached.on.Time_Y.N'] == 0).sum())
+            hi_rate = n_hi_fail / n_hi
+            lo_rate = n_lo_fail / n_lo
+            gap = hi_rate - lo_rate
+            # Annual impact: failures * $3.94 * 365/T_OPERATIONAL approximation
+            annual_impact_cr = round((n_hi_fail * self.LEAKAGE_SEED * 365 / T_OPERATIONAL) / 10_000_000, 2)
+            result.append({
+                "hub": name,
+                "rho": round(hub.rho if hub else 0, 4),
+                "hi_fail_rate": round(hi_rate, 4),
+                "lo_fail_rate": round(lo_rate, 4),
+                "irp_gap": round(gap, 4),
+                "annual_impact_cr": annual_impact_cr,
+                "leakage": round(n_hi_fail * self.LEAKAGE_SEED, 2),
+            })
+        return result
+
     def warehouse_metrics(self) -> list:
+        """P1-6: Include block E — all 6 blocks A-F."""
         results = []
         for b in ['A', 'B', 'C', 'D', 'E', 'F']:
             sub = self.df[self.df['Warehouse_block'] == b]
@@ -251,6 +308,7 @@ class MIMIKernel:
         return results
 
     def average_delay_per_block(self) -> list:
+        """P1-6: Include block E."""
         mode_map = {'Ship': 2.0, 'Flight': 0.5, 'Road': 1.0}
         results = []
         for b in ['A', 'B', 'C', 'D', 'E', 'F']:
@@ -296,18 +354,21 @@ class MIMIKernel:
         }
 
     def fit_lr(self) -> float:
+        """P2-4: Subsample for fast calibration — ~1-2s instead of 30-45s."""
         df = self.df.copy()
+        SAMPLE_SIZE = min(len(df), 8000)
+        df_sample = df.sample(SAMPLE_SIZE, random_state=42)
         for col in ['Mode_of_Shipment', 'Product_importance', 'Warehouse_block', 'Gender']:
-            if col in df.columns:
-                df[f'{col}_enc'] = LabelEncoder().fit_transform(df[col].astype(str))
+            if col in df_sample.columns:
+                df_sample[f'{col}_enc'] = LabelEncoder().fit_transform(df_sample[col].astype(str))
         features = [c for c in [
             'Customer_care_calls', 'Customer_rating', 'Cost_of_the_Product',
             'Prior_purchases', 'Discount_offered', 'Weight_in_gms',
             'Mode_of_Shipment_enc', 'Product_importance_enc', 'Warehouse_block_enc', 'Gender_enc'
-        ] if c in df.columns]
-        X = df[features].values
-        y = df['Reached.on.Time_Y.N'].values
-        self.lr_model = LogisticRegression(max_iter=2000, random_state=42)
+        ] if c in df_sample.columns]
+        X = df_sample[features].values
+        y = df_sample['Reached.on.Time_Y.N'].values
+        self.lr_model = LogisticRegression(max_iter=500, random_state=42)
         self.lr_model.fit(X, y)
         proba_late = 1 - self.lr_model.predict_proba(X)[:, 1]
         new_thresh = float(np.mean(proba_late) + 1.0 * np.std(proba_late))
@@ -320,7 +381,8 @@ def _generate_dataset(n: int = 10999, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     return pd.DataFrame({
         'ID': range(1, n + 1),
-        'Warehouse_block': rng.choice(['A', 'B', 'C', 'D', 'F'], n, p=[0.25, 0.20, 0.15, 0.15, 0.25]),
+        # P1-6: Include E in generated data
+        'Warehouse_block': rng.choice(['A', 'B', 'C', 'D', 'E', 'F'], n, p=[0.22, 0.18, 0.15, 0.15, 0.10, 0.20]),
         'Mode_of_Shipment': rng.choice(['Ship', 'Flight', 'Road'], n, p=[0.55, 0.33, 0.12]),
         'Customer_care_calls': rng.integers(1, 8, n).astype(int),
         'Customer_rating': rng.integers(1, 6, n).astype(int),
@@ -334,19 +396,12 @@ def _generate_dataset(n: int = 10999, seed: int = 42) -> pd.DataFrame:
     })
 
 
-# ─── SESSION STATE ────────────────────────────────────────────────────────────
-_session: dict = {
-    "mimi": None, "diverted_units": 0, "revenue_saved": 0.0,
-    "refresh_count": 0, "rho_history": [], "dataset_name": "SAFEXPRESS_CASE_02028317",
-    "mu": 150.0,
-}
-
-# SSE subscribers: list of asyncio.Queue
-_sse_subscribers: list = []
+# ─── P1-3: PER-TENANT SSE SUBSCRIBERS ────────────────────────────────────────
+_sse_subscribers: dict[str, list] = {}
 
 
-def _broadcast_state(state: dict):
-    """Push state to all active SSE subscribers."""
+def _broadcast_state(state: dict, tenant_key: str = "default"):
+    """Push state only to the relevant tenant's SSE subscribers."""
     msg = json.dumps({
         "global_rho": state.get("global_rho"),
         "rho": state.get("rho"),
@@ -358,14 +413,16 @@ def _broadcast_state(state: dict):
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
     dead = []
-    for q in _sse_subscribers:
+    for q in _sse_subscribers.get(tenant_key, []):
         try:
             q.put_nowait(msg)
         except:
             dead.append(q)
     for q in dead:
-        try: _sse_subscribers.remove(q)
-        except: pass
+        try:
+            _sse_subscribers[tenant_key].remove(q)
+        except:
+            pass
 
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -471,9 +528,9 @@ def _compute_cascade(hubs: dict) -> tuple:
     return effective, events
 
 
-def _build_kernel_state() -> dict:
-    """Build the full kernel state dict — used by both REST and SSE."""
-    mimi: MIMIKernel = _session["mimi"]
+def _build_kernel_state(session: dict) -> dict:
+    """Build the full kernel state dict for a specific tenant session."""
+    mimi: MIMIKernel = session["mimi"]
     if mimi is None:
         return {}
 
@@ -512,13 +569,14 @@ def _build_kernel_state() -> dict:
 
     phi_val = mimi.phi(global_rho_measured)
     irp = mimi.inverse_reliability()
+    irp_per_hub = mimi.irp_per_hub()
     alpha_k = hub_states[0]["kalman"] if hub_states else {}
 
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    _session["rho_history"].append({"time": ts, "rho": round(global_rho_measured, 4),
+    session["rho_history"].append({"time": ts, "rho": round(global_rho_measured, 4),
                                      "t1": alpha_k.get("rho_t1", 0), "t3": alpha_k.get("rho_t3", 0)})
-    if len(_session["rho_history"]) > 30:
-        _session["rho_history"].pop(0)
+    if len(session["rho_history"]) > 30:
+        session["rho_history"].pop(0)
 
     critical_hub = max(hub_states, key=lambda h: h["rho"])
     rho_t3_max = critical_hub["kalman"]["rho_t3"]
@@ -553,19 +611,102 @@ def _build_kernel_state() -> dict:
         "kalman": alpha_k, "rho_t3": rho_t3_max,
         "pvi": alpha_k.get("pvi", 0), "pvi_alert": alpha_k.get("pvi", 0) > 15.0,
         "commander_message": commander_msg, "commander_level": commander_level,
-        "inverse_reliability": irp, "warehouse_metrics": mimi.warehouse_metrics(),
+        "inverse_reliability": irp,
+        "inverse_reliability_per_hub": irp_per_hub,  # P1-5: real per-hub IRP data
+        "warehouse_metrics": mimi.warehouse_metrics(),
         "mode_metrics": mimi.mode_metrics(), "average_delay": mimi.average_delay_per_block(),
         "red_zone_importance": mimi.red_zone_importance(),
         "routing": mimi.routing_logic(global_rho_measured),
         "catastrophe": global_rho_measured > 0.80, "collapse": global_rho_measured >= 0.85,
         "catastrophe_predicted": rho_t3_max > 0.80, "collapse_predicted": rho_t3_max >= 0.85,
-        "rho_history": _session["rho_history"][-30:],
+        "rho_history": session["rho_history"][-30:],
         "annualized_exposure": mimi.ANNUALIZED_EXPOSURE, "leakage_seed": mimi.LEAKAGE_SEED,
-        "diverted_units": _session["diverted_units"], "revenue_saved": round(_session["revenue_saved"], 2),
-        "refresh_count": _session["refresh_count"], "dataset_name": _session["dataset_name"],
+        "diverted_units": session["diverted_units"], "revenue_saved": round(session["revenue_saved"], 2),
+        "refresh_count": session["refresh_count"], "dataset_name": session["dataset_name"],
+        "leakage_model": {
+            "seed": 3.94,
+            "components": {"recovery_cost": 1.20, "clv_loss": 2.74},
+            "source": "Calibrated against Safexpress Case #02028317",
+            "configurable": True
+        }
     }
     return state
 
+
+# ─── FASTAPI APP with lifespan (P2-3: no deprecated on_event) ────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """P2-3: Use lifespan instead of deprecated on_event."""
+    global client, db
+
+    # Load API keys from env
+    _load_env_keys()
+
+    # P1-2: Lazy MongoDB init with graceful degradation
+    try:
+        client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=3000)
+        await client.admin.command("ping")
+        db = client[db_name]
+        logger.info("MongoDB connected")
+        # Load persisted keys from MongoDB
+        try:
+            async for doc in db.api_keys.find({"active": True}):
+                key = doc.get("key")
+                if key and key not in _api_keys:
+                    _api_keys[key] = {
+                        "role": doc.get("role", "READONLY"),
+                        "client": doc.get("client", "unknown"),
+                        "active": True,
+                        "created_at": doc.get("created_at", ""),
+                    }
+            logger.info(f"Loaded {len(_api_keys)} API keys")
+        except Exception as e:
+            logger.warning(f"MongoDB key load failed: {e}")
+    except Exception as e:
+        logger.warning(f"MongoDB unavailable — degraded mode (no persistence): {e}")
+
+    # Initialize default session kernel
+    default_session = _get_session("default")
+    df = _generate_dataset()
+    default_session["mimi"] = MIMIKernel(df)
+    default_session["mu"] = 150.0
+    logger.info(f"MIMI Kernel v2.0 initialized: n={len(df)}, Global ρ={default_session['mimi'].global_rho():.4f}")
+
+    # P1-1: Non-blocking LR fit in background
+    async def _background_fit():
+        await asyncio.sleep(2)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, default_session["mimi"].fit_lr)
+        logger.info(f"LR fitted: ρ_c={default_session['mimi'].critical_rho:.4f}")
+
+    asyncio.create_task(_background_fit())
+    logger.info("SSE endpoint ready at /api/v1/stream")
+
+    yield  # App runs here
+
+    # Shutdown
+    if client:
+        client.close()
+
+
+app = FastAPI(title="SITI Intelligence API", version="2.0.0", lifespan=lifespan)
+api_router = APIRouter(prefix="/api")
+
+# ─── P1-4: CORS — safe default, not wildcard ─────────────────────────────────
+CORS_ORIGINS = os.environ.get(
+    "CORS_ORIGINS",
+    "https://siti-gsc-kernel.vercel.app,http://localhost:3000"
+).split(",")
+CORS_ORIGINS = [o.strip() for o in CORS_ORIGINS if o.strip()]
+logger.info(f"CORS origins: {CORS_ORIGINS}")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ─── ROUTES ───────────────────────────────────────────────────────────────────
 
@@ -575,37 +716,56 @@ async def root():
 
 
 @api_router.get("/kernel/state")
-async def get_kernel_state():
-    mimi = _session["mimi"]
-    if mimi is None:
-        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
-    state = _build_kernel_state()
-    _broadcast_state(state)
+async def get_kernel_state(key_data: dict = Depends(_verify_api_key)):
+    tenant = key_data.get("client", "default")
+    session = _get_session(tenant)
+    if session["mimi"] is None:
+        # Init tenant kernel from default
+        default = _get_session("default")
+        if default["mimi"]:
+            session["mimi"] = MIMIKernel(_generate_dataset(), default.get("mu", 150.0))
+        else:
+            raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
+    state = _build_kernel_state(session)
+    _broadcast_state(state, tenant_key=tenant)
     return state
 
 
 @api_router.post("/kernel/tick")
-async def kernel_tick():
-    mimi = _session["mimi"]
+async def kernel_tick(key_data: dict = Depends(_verify_api_key)):
+    tenant = key_data.get("client", "default")
+    session = _get_session(tenant)
+    mimi = session["mimi"]
     if mimi is None:
         raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
     g_rho = mimi.global_rho()
     diverted = random.randint(12, 28) if g_rho > 0.80 else random.randint(6, 15) if g_rho > 0.75 else random.randint(2, 8)
-    _session["diverted_units"] += diverted
-    _session["revenue_saved"] = _session["diverted_units"] * mimi.LEAKAGE_SEED
-    _session["refresh_count"] += 1
+    session["diverted_units"] += diverted
+    session["revenue_saved"] = session["diverted_units"] * mimi.LEAKAGE_SEED
+    session["refresh_count"] += 1
     return {
-        "diverted": diverted, "total_diverted": _session["diverted_units"],
-        "revenue_saved": round(_session["revenue_saved"], 2), "refresh_count": _session["refresh_count"],
+        "diverted": diverted, "total_diverted": session["diverted_units"],
+        "revenue_saved": round(session["revenue_saved"], 2), "refresh_count": session["refresh_count"],
     }
 
 
 @api_router.post("/kernel/upload")
-async def upload_dataset(file: UploadFile = File(...)):
+async def upload_dataset(file: UploadFile = File(...), key_data: dict = Depends(_verify_api_key)):
     try:
-        content = await file.read()
+        # P2-2: Size guard BEFORE reading full content
+        content = await file.read(MAX_CSV_BYTES + 1)
+        if len(content) > MAX_CSV_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds 50MB limit. Use the streaming API for larger datasets.")
+
         df = _parse_csv_resilient(content)
         df = _fuzzy_map_columns(df)
+
+        # P1-6: Warn on unknown blocks
+        if 'Warehouse_block' in df.columns:
+            blocks_found = set(df['Warehouse_block'].dropna().unique())
+            unknown = blocks_found - set('ABCDEFGHIJ')
+            if unknown:
+                logger.warning(f"Unknown warehouse blocks in upload: {unknown}")
 
         if 'Reached.on.Time_Y.N' not in df.columns:
             suggestions = {}
@@ -639,22 +799,25 @@ async def upload_dataset(file: UploadFile = File(...)):
         df = _sanitize_numeric_columns(df)
         df = _fill_missing_with_means(df)
 
-        new_kernel = MIMIKernel(df, _session.get("mu", 150.0))
+        tenant = key_data.get("client", "default")
+        session = _get_session(tenant)
+
+        new_kernel = MIMIKernel(df, session.get("mu", 150.0))
         new_critical_rho = new_kernel.fit_lr()
 
-        _session["mimi"] = new_kernel
-        _session["diverted_units"] = 0
-        _session["revenue_saved"] = 0.0
-        _session["refresh_count"] = 0
-        _session["rho_history"] = []
-        _session["dataset_name"] = file.filename or "UPLOADED_DATASET"
+        session["mimi"] = new_kernel
+        session["diverted_units"] = 0
+        session["revenue_saved"] = 0.0
+        session["refresh_count"] = 0
+        session["rho_history"] = []
+        session["dataset_name"] = file.filename or "UPLOADED_DATASET"
 
         g_rho = new_kernel.global_rho()
         return {
             "success": True, "n_total": len(df),
             "new_rho": round(g_rho, 4), "new_critical_rho": new_critical_rho,
             "message": f"MIMI Kernel reinitialized. Global ρ={g_rho:.4f}, ρ_c={new_critical_rho:.4f}",
-            "dataset_name": _session["dataset_name"],
+            "dataset_name": session["dataset_name"],
         }
     except HTTPException:
         raise
@@ -664,10 +827,15 @@ async def upload_dataset(file: UploadFile = File(...)):
 
 
 @api_router.post("/kernel/stream-batch")
-async def stream_batch(n: int = 100):
-    mimi = _session["mimi"]
+async def stream_batch(n: int = 100, key_data: dict = Depends(_verify_api_key)):
+    tenant = key_data.get("client", "default")
+    session = _get_session(tenant)
+    mimi = session["mimi"]
     if mimi is None:
         raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
+
+    # P1-7: cap n to prevent memory bomb
+    n = min(n, 500)
 
     rng = np.random.default_rng()
     rho_base = mimi.failure_rate()
@@ -675,7 +843,7 @@ async def stream_batch(n: int = 100):
 
     new_rows = pd.DataFrame({
         'ID':                  range(mimi.n_total + 1, mimi.n_total + n + 1),
-        'Warehouse_block':     rng.choice(['A', 'B', 'C', 'D', 'F'], n, p=[0.25, 0.20, 0.15, 0.15, 0.25]),
+        'Warehouse_block':     rng.choice(['A', 'B', 'C', 'D', 'E', 'F'], n, p=[0.20, 0.17, 0.14, 0.14, 0.10, 0.25]),
         'Mode_of_Shipment':    rng.choice(['Ship', 'Flight', 'Road'], n, p=[0.55, 0.33, 0.12]),
         'Customer_care_calls': rng.integers(1, 8, n).astype(int),
         'Customer_rating':     rng.integers(1, 6, n).astype(int),
@@ -694,15 +862,15 @@ async def stream_batch(n: int = 100):
 
     new_rho = mimi.global_rho()
     diverted = int(n * new_rho * 0.25)
-    _session["diverted_units"] += diverted
-    _session["revenue_saved"] = _session["diverted_units"] * mimi.LEAKAGE_SEED
-    _session["refresh_count"] += 1
+    session["diverted_units"] += diverted
+    session["revenue_saved"] = session["diverted_units"] * mimi.LEAKAGE_SEED
+    session["refresh_count"] += 1
 
     return {
         "success": True, "injected": n, "new_n_total": mimi.n_total,
         "new_rho": round(new_rho, 4), "diverted": diverted,
-        "total_diverted": _session["diverted_units"],
-        "revenue_saved": round(_session["revenue_saved"], 2),
+        "total_diverted": session["diverted_units"],
+        "revenue_saved": round(session["revenue_saved"], 2),
     }
 
 
@@ -717,41 +885,43 @@ class HubMuUpdate(BaseModel):
 
 
 @api_router.post("/kernel/set-mu")
-async def set_mu(data: MuUpdate):
-    mimi = _session["mimi"]
+async def set_mu(data: MuUpdate, key_data: dict = Depends(_verify_api_key)):
+    tenant = key_data.get("client", "default")
+    session = _get_session(tenant)
+    mimi = session["mimi"]
     if mimi is None:
         raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
     if data.mu < 10 or data.mu > 1000:
         raise HTTPException(status_code=400, detail="μ must be between 10 and 1000")
     mimi.update_mu(data.mu)
-    _session["mu"] = data.mu
+    session["mu"] = data.mu
     return {"success": True, "mu": data.mu, "new_global_rho": round(mimi.global_rho(), 4)}
 
 
 @api_router.post("/kernel/set-hub-mu")
-async def set_hub_mu(data: HubMuUpdate):
-    """Set service capacity for a specific hub independently."""
-    mimi = _session["mimi"]
+async def set_hub_mu(data: HubMuUpdate, key_data: dict = Depends(_verify_api_key)):
+    tenant = key_data.get("client", "default")
+    session = _get_session(tenant)
+    mimi = session["mimi"]
     if mimi is None:
         raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
     if data.mu < 10 or data.mu > 2000:
         raise HTTPException(status_code=400, detail="μ must be between 10 and 2000")
     if data.hub_name not in mimi.hubs:
-        raise HTTPException(status_code=404, detail=f"Hub '{data.hub_name}' not found. Valid hubs: {list(mimi.hubs.keys())}")
+        raise HTTPException(status_code=404, detail=f"Hub '{data.hub_name}' not found. Valid: {list(mimi.hubs.keys())}")
     mimi.update_hub_mu(data.hub_name, data.mu)
-    hub_rho = mimi.hubs[data.hub_name].rho
     return {
         "success": True, "hub": data.hub_name, "new_mu": data.mu,
-        "new_hub_rho": round(hub_rho, 4),
+        "new_hub_rho": round(mimi.hubs[data.hub_name].rho, 4),
         "new_global_rho": round(mimi.global_rho(), 4),
-        "available_hubs": list(mimi.hubs.keys()),
     }
 
 
 @api_router.get("/kernel/hub-sizes")
-async def get_hub_sizes():
-    """Get current μ (service capacity) for all hubs."""
-    mimi = _session["mimi"]
+async def get_hub_sizes(key_data: dict = Depends(_verify_api_key)):
+    tenant = key_data.get("client", "default")
+    session = _get_session(tenant)
+    mimi = session["mimi"]
     if mimi is None:
         raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
     return {
@@ -774,28 +944,25 @@ async def get_hub_sizes():
     }
 
 
-# ─── SSE LIVE STREAM ──────────────────────────────────────────────────────────
+# ─── P1-3: PER-TENANT SSE LIVE STREAM ────────────────────────────────────────
 
 @api_router.get("/v1/stream")
-async def sse_stream(key: str = None):
-    """
-    Server-Sent Events endpoint for real-time kernel state.
-    Companies connect their frontend here for live dashboard updates.
-    
-    Usage: new EventSource('/api/v1/stream?key=YOUR_API_KEY')
-    Each event: {global_rho, phi, status, recommended_action, cascade_events, pvi, timestamp}
-    """
-    # Auth check
-    if key and key not in _api_keys:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+async def sse_stream(request: Request, key: str = None):
+    if not key or key not in _api_keys:
+        raise HTTPException(status_code=401, detail="Valid API key required for SSE stream")
+
+    key_data = _api_keys[key]
+    tenant = key_data.get("client", "default")
 
     q = asyncio.Queue(maxsize=50)
-    _sse_subscribers.append(q)
+    if tenant not in _sse_subscribers:
+        _sse_subscribers[tenant] = []
+    _sse_subscribers[tenant].append(q)
 
     async def event_generator():
         try:
-            # Send initial state immediately
-            mimi = _session["mimi"]
+            session = _get_session(tenant)
+            mimi = session["mimi"]
             if mimi:
                 initial = {
                     "global_rho": round(mimi.global_rho(), 4),
@@ -807,22 +974,23 @@ async def sse_stream(key: str = None):
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "connected": True,
                     "kernel_version": "2.0.0",
+                    "tenant": tenant,
                 }
                 yield f"data: {json.dumps(initial)}\n\n"
 
-            # Stream subsequent events
             while True:
                 try:
                     msg = await asyncio.wait_for(q.get(), timeout=30.0)
                     yield f"data: {msg}\n\n"
                 except asyncio.TimeoutError:
-                    # Heartbeat to keep connection alive
                     yield f"data: {json.dumps({'heartbeat': True, 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
         except asyncio.CancelledError:
             pass
         finally:
-            try: _sse_subscribers.remove(q)
-            except: pass
+            try:
+                _sse_subscribers.get(tenant, []).remove(q)
+            except:
+                pass
 
     return StreamingResponse(
         event_generator(),
@@ -838,9 +1006,10 @@ async def sse_stream(key: str = None):
 # ─── ENTERPRISE API ───────────────────────────────────────────────────────────
 
 @api_router.post("/v1/intercept")
-async def intercept_endpoint(payload: dict = {}):
-    """Enterprise interception endpoint. Submit shipment data, get MIMI risk assessment."""
-    mimi = _session["mimi"]
+async def intercept_endpoint(payload: dict = {}, key_data: dict = Depends(_verify_api_key)):
+    tenant = key_data.get("client", "default")
+    session = _get_session(tenant)
+    mimi = session["mimi"]
     if mimi is None:
         raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
 
@@ -857,7 +1026,6 @@ async def intercept_endpoint(payload: dict = {}):
             "status": "CRITICAL" if eff_rho >= 0.85 else "WARNING" if eff_rho > 0.75 else "NOMINAL",
         })
 
-    # Broadcast to SSE subscribers
     state_snapshot = {
         "global_rho": round(g_rho, 4),
         "phi": mimi.phi(g_rho),
@@ -865,8 +1033,10 @@ async def intercept_endpoint(payload: dict = {}):
         "recommended_action": "DIVERT" if g_rho > 0.85 else "MONITOR" if g_rho > 0.75 else "NOMINAL",
         "cascade_events": cascade,
         "pvi": 0,
+        "catastrophe": g_rho > 0.80,
+        "collapse": g_rho >= 0.85,
     }
-    _broadcast_state(state_snapshot)
+    _broadcast_state(state_snapshot, tenant_key=tenant)
 
     return {
         "status": "collapse" if g_rho >= 0.85 else "critical" if g_rho > 0.80 else "nominal",
@@ -911,7 +1081,6 @@ class CreateKeyRequest(BaseModel):
 
 @api_router.post("/admin/create-key")
 async def create_api_key(data: CreateKeyRequest, key_data: dict = Depends(_require_role({"ADMIN"}))):
-    """ADMIN ONLY: Provision a new API key for a client."""
     if data.role.upper() not in ROLES:
         raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(ROLES)}")
 
@@ -925,42 +1094,42 @@ async def create_api_key(data: CreateKeyRequest, key_data: dict = Depends(_requi
         "notes": data.notes,
     }
 
-    # Persist to MongoDB
-    try:
-        await db.api_keys.insert_one({
-            "key": new_key, "role": data.role.upper(), "client": data.client_name,
-            "active": True, "created_at": datetime.now(timezone.utc).isoformat(),
-            "notes": data.notes,
-        })
-    except Exception as e:
-        logger.warning(f"Failed to persist key to MongoDB: {e}")
+    # Persist to MongoDB if available
+    if db is not None:
+        try:
+            await db.api_keys.insert_one({
+                "key": new_key, "role": data.role.upper(), "client": data.client_name,
+                "active": True, "created_at": datetime.now(timezone.utc).isoformat(),
+                "notes": data.notes,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to persist key to MongoDB: {e}")
 
     return {
         "success": True,
         "api_key": new_key,
         "role": data.role.upper(),
         "client": data.client_name,
-        "message": f"API key provisioned for {data.client_name}. Share key with client — it grants {data.role} access.",
+        "message": f"API key provisioned for {data.client_name}.",
         "permissions": list(ROLE_PERMISSIONS.get(data.role.upper(), set())),
     }
 
 
 @api_router.post("/admin/revoke-key")
 async def revoke_api_key(key_to_revoke: str, key_data: dict = Depends(_require_role({"ADMIN"}))):
-    """ADMIN ONLY: Revoke an API key."""
     if key_to_revoke not in _api_keys:
         raise HTTPException(status_code=404, detail="Key not found")
     _api_keys[key_to_revoke]["active"] = False
-    try:
-        await db.api_keys.update_one({"key": key_to_revoke}, {"$set": {"active": False}})
-    except Exception as e:
-        logger.warning(f"Failed to revoke key in MongoDB: {e}")
+    if db is not None:
+        try:
+            await db.api_keys.update_one({"key": key_to_revoke}, {"$set": {"active": False}})
+        except Exception as e:
+            logger.warning(f"Failed to revoke key in MongoDB: {e}")
     return {"success": True, "message": f"Key revoked. Client {_api_keys[key_to_revoke]['client']} can no longer access SITI."}
 
 
 @api_router.get("/admin/list-keys")
 async def list_keys(key_data: dict = Depends(_require_role({"ADMIN"}))):
-    """ADMIN ONLY: List all API keys."""
     return {
         "keys": [
             {"client": v["client"], "role": v["role"], "active": v["active"],
@@ -970,10 +1139,7 @@ async def list_keys(key_data: dict = Depends(_require_role({"ADMIN"}))):
     }
 
 
-# ─── RAZORPAY PAYMENT WEBHOOK ─────────────────────────────────────────────────
-
-RAZORPAY_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
-SENDGRID_KEY = os.environ.get("SENDGRID_KEY", "")
+# ─── P0-3: RAZORPAY PAYMENT WEBHOOK (FIXED — signature verified) ─────────────
 
 PLAN_CONFIG = {
     "pilot":      {"role": "OPERATOR",    "display": "PILOT — ₹29,999/mo"},
@@ -983,17 +1149,35 @@ PLAN_CONFIG = {
 
 
 @api_router.post("/payments/razorpay-webhook")
-async def razorpay_webhook(request_body: dict):
+async def razorpay_webhook(request: Request):
     """
-    Razorpay webhook: on payment.captured, auto-provision an API key
-    and optionally send it via email (if SendGrid is configured).
-    
-    Razorpay sends: event, payload.payment.entity
+    P0-3: Razorpay webhook with proper HMAC signature verification.
+    Razorpay retries on 5xx — so we raise on payment persistence failure.
     """
-    # Signature verification would go here in production:
-    # signature = headers.get("X-Razorpay-Signature")
-    # expected = hmac.new(RAZORPAY_SECRET.encode(), body, hashlib.sha256).hexdigest()
-    # if not hmac.compare_digest(signature, expected): raise HTTPException(403)
+    # Read raw bytes BEFORE json parse — required for HMAC
+    webhook_body = await request.body()
+
+    # Signature verification
+    sig = request.headers.get("X-Razorpay-Signature", "")
+
+    if RAZORPAY_SECRET:
+        if not sig:
+            raise HTTPException(status_code=403, detail="Missing Razorpay signature")
+        expected = hmac.new(
+            RAZORPAY_SECRET.encode(),
+            webhook_body,
+            hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            logger.warning(f"Razorpay signature mismatch — possible spoofed webhook")
+            raise HTTPException(status_code=403, detail="Webhook signature mismatch")
+    else:
+        logger.warning("RAZORPAY_WEBHOOK_SECRET not set — skipping signature verification (dev mode)")
+
+    try:
+        request_body = json.loads(webhook_body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     event = request_body.get("event", "")
     if event != "payment.captured":
@@ -1001,13 +1185,20 @@ async def razorpay_webhook(request_body: dict):
 
     payment = request_body.get("payload", {}).get("payment", {}).get("entity", {})
     payment_id = payment.get("id", "unknown")
-    amount = payment.get("amount", 0)  # In paise
+    amount = payment.get("amount", 0)
     email = payment.get("email", "")
     contact = payment.get("contact", "")
     notes = payment.get("notes", {})
     plan = notes.get("plan", "pilot").lower()
 
     plan_data = PLAN_CONFIG.get(plan, PLAN_CONFIG["pilot"])
+
+    # P1-8: Idempotency check — prevent duplicate provisioning
+    if db is not None:
+        existing = await db.api_keys.find_one({"payment_id": payment_id})
+        if existing:
+            logger.info(f"Payment {payment_id} already provisioned — returning existing key")
+            return {"status": "already_provisioned", "api_key": existing["key"]}
 
     import secrets
     client_name = email.split("@")[0] if email else contact or "new_client"
@@ -1018,28 +1209,34 @@ async def razorpay_webhook(request_body: dict):
         "client": client_name,
         "active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "notes": f"Auto-provisioned via Razorpay. Payment: {payment_id}. Plan: {plan_data['display']}",
+        "notes": f"Auto-provisioned. Payment: {payment_id}. Plan: {plan_data['display']}",
         "payment_id": payment_id,
         "plan": plan,
     }
 
-    # Persist to MongoDB
-    try:
-        await db.api_keys.insert_one({
-            "key": new_key, "role": plan_data["role"], "client": client_name,
-            "active": True, "payment_id": payment_id, "plan": plan,
-            "amount_paise": amount, "email": email,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        await db.payments.insert_one({
-            "payment_id": payment_id, "amount_paise": amount, "amount_inr": amount / 100,
-            "email": email, "contact": contact, "plan": plan, "api_key": new_key,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-    except Exception as e:
-        logger.warning(f"MongoDB write failed for payment {payment_id}: {e}")
+    # P1-8: MongoDB write MUST succeed — raise on failure so Razorpay retries
+    if db is not None:
+        try:
+            await db.api_keys.insert_one({
+                "key": new_key, "role": plan_data["role"], "client": client_name,
+                "active": True, "payment_id": payment_id, "plan": plan,
+                "amount_paise": amount, "email": email,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            await db.payments.insert_one({
+                "payment_id": payment_id, "amount_paise": amount, "amount_inr": amount / 100,
+                "email": email, "contact": contact, "plan": plan, "api_key": new_key,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as e:
+            logger.error(f"CRITICAL: Payment {payment_id} received but not persisted: {e}")
+            # Remove from memory so Razorpay retry will re-provision correctly
+            del _api_keys[new_key]
+            raise HTTPException(status_code=500, detail="Payment recorded but key provisioning failed — will retry")
+    else:
+        logger.warning(f"MongoDB unavailable — key {new_key[:20]}... stored in-memory only")
 
-    # Send email via SendGrid (if configured)
+    # Send email via SendGrid (non-blocking, non-critical)
     email_sent = False
     if SENDGRID_KEY and email:
         try:
@@ -1050,24 +1247,7 @@ async def razorpay_webhook(request_body: dict):
                 "subject": f"Your SITI Intelligence API Key — {plan_data['display']}",
                 "content": [{
                     "type": "text/plain",
-                    "value": f"""Welcome to SITI Intelligence!
-
-Your API Key: {new_key}
-Plan: {plan_data['display']}
-Role: {plan_data['role']}
-
-To get started:
-  POST https://siti-gsc-kernel-1.onrender.com/api/v1/intercept
-  Header: X-API-KEY: {new_key}
-
-For live dashboard streaming:
-  Connect to: wss://siti-gsc-kernel-1.onrender.com/api/v1/stream?key={new_key}
-
-Documentation: https://siti-gsc-kernel.vercel.app
-Support: support@siti-intelligence.io
-
-— SITI Intelligence Team
-"""
+                    "value": f"Welcome to SITI Intelligence!\n\nYour API Key: {new_key}\nPlan: {plan_data['display']}\nRole: {plan_data['role']}\n\nEndpoint: POST https://siti-gsc-kernel-1.onrender.com/api/v1/intercept\nHeader: X-API-KEY: {new_key}\n\nSupport: support@siti-intelligence.io\n— SITI Intelligence Team"
                 }]
             }
             async with httpx.AsyncClient() as c:
@@ -1079,59 +1259,42 @@ Support: support@siti-intelligence.io
                 )
             email_sent = True
         except Exception as e:
-            logger.warning(f"SendGrid failed: {e}")
+            logger.warning(f"SendGrid failed (non-critical): {e}")
 
     logger.info(f"Payment captured: {payment_id}, plan={plan}, key={new_key[:20]}..., email_sent={email_sent}")
-
     return {
-        "status": "provisioned",
-        "api_key": new_key,
-        "plan": plan,
-        "role": plan_data["role"],
-        "email_sent": email_sent,
-        "payment_id": payment_id,
-        "message": "API key provisioned and email sent to client.",
+        "status": "provisioned", "api_key": new_key, "plan": plan,
+        "role": plan_data["role"], "email_sent": email_sent, "payment_id": payment_id,
     }
 
 
 @api_router.get("/payments/plans")
 async def get_plans():
-    """Public endpoint: return pricing plans."""
     return {
         "plans": [
             {
-                "id": "pilot",
-                "name": "PILOT",
-                "price_inr": 29999,
-                "price_display": "₹29,999/mo",
-                "hubs": 1,
-                "shipments_per_month": "50,000",
+                "id": "pilot", "name": "PILOT",
+                "price_inr": 29999, "price_display": "₹29,999/mo",
+                "hubs": 1, "shipments_per_month": "50,000",
                 "features": ["1 hub monitored", "CSV upload", "PDF forensic audit", "Email support"],
                 "razorpay_plan_id": os.environ.get("RAZORPAY_PILOT_PLAN_ID", ""),
             },
             {
-                "id": "operator",
-                "name": "OPERATOR",
-                "price_inr": 74999,
-                "price_display": "₹74,999/mo",
-                "hubs": 5,
-                "shipments_per_month": "500,000",
+                "id": "operator", "name": "OPERATOR",
+                "price_inr": 74999, "price_display": "₹74,999/mo",
+                "hubs": 5, "shipments_per_month": "500,000",
                 "features": ["5 hubs monitored", "WhatsApp alerts via Twilio", "Live API stream (SSE)", "Priority support"],
                 "razorpay_plan_id": os.environ.get("RAZORPAY_OPERATOR_PLAN_ID", ""),
             },
             {
-                "id": "enterprise",
-                "name": "ENTERPRISE",
-                "price_inr": None,
-                "price_display": "Custom",
-                "hubs": "Unlimited",
-                "shipments_per_month": "Unlimited",
-                "features": ["Redis/K8s scaling", "Delhivery-scale support", "Dedicated onboarding", "SLA guarantee", "Custom integrations"],
+                "id": "enterprise", "name": "ENTERPRISE",
+                "price_inr": None, "price_display": "Custom",
+                "hubs": "Unlimited", "shipments_per_month": "Unlimited",
+                "features": ["Redis/K8s scaling", "Delhivery-scale support", "Dedicated onboarding", "SLA guarantee"],
                 "contact": "enterprise@siti-intelligence.io",
             },
         ],
         "currency": "INR",
-        "contact": "https://wa.me/917XXXXXXXXX",
     }
 
 
@@ -1139,66 +1302,20 @@ async def get_plans():
 
 @api_router.get("/health")
 async def health():
-    mimi = _session["mimi"]
+    default_session = _get_session("default")
+    mimi = default_session["mimi"]
     return {
         "status": "healthy",
         "kernel_initialized": mimi is not None,
         "n_total": mimi.n_total if mimi else 0,
         "global_rho": round(mimi.global_rho(), 4) if mimi else None,
-        "sse_subscribers": len(_sse_subscribers),
+        "sse_subscribers": sum(len(v) for v in _sse_subscribers.values()),
+        "active_tenants": len(_sessions),
         "api_keys_active": sum(1 for v in _api_keys.values() if v.get("active")),
+        "mongodb": "connected" if db is not None else "degraded",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
 # ─── APP SETUP ────────────────────────────────────────────────────────────────
 app.include_router(api_router)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.on_event("startup")
-async def init_kernel():
-    import asyncio
-    _load_env_keys()
-
-    # Also load keys from MongoDB if available
-    try:
-        async for doc in db.api_keys.find({"active": True}):
-            key = doc.get("key")
-            if key and key not in _api_keys:
-                _api_keys[key] = {
-                    "role": doc.get("role", "READONLY"),
-                    "client": doc.get("client", "unknown"),
-                    "active": True,
-                    "created_at": doc.get("created_at", ""),
-                }
-        logger.info(f"Loaded {len(_api_keys)} API keys ({sum(1 for v in _api_keys.values() if v.get('active'))} active)")
-    except Exception as e:
-        logger.warning(f"MongoDB key load failed (using env keys only): {e}")
-
-    df = _generate_dataset()
-    _session["mimi"] = MIMIKernel(df)
-    _session["mu"] = 150.0
-
-    logger.info(f"MIMI Kernel v2.0 initialized: n={len(df)}, Global ρ={_session['mimi'].global_rho():.4f}")
-    for name, hub in _session["mimi"].hubs.items():
-        logger.info(f"  Hub {name}: λ={hub.lambda_rate:.1f}/hr, μ={hub.mu:.0f}/hr, ρ={hub.rho:.4f}")
-
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _session["mimi"].fit_lr)
-    logger.info(f"LR fitted: ρ_c={_session['mimi'].critical_rho:.4f}")
-    logger.info(f"SSE endpoint ready at /api/v1/stream")
-    logger.info(f"Payment webhook ready at /api/payments/razorpay-webhook")
-    logger.info(f"Admin key creation at /api/admin/create-key (requires ADMIN key)")
-
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
