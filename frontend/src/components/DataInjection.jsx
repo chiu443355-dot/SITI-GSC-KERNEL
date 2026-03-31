@@ -280,9 +280,9 @@ export default function DataInjection({
     doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
     [
-      `ρ = λ/μ = ${(kState?.total_lambda ?? 0).toFixed(1)} / ${((kState?.mu ?? 150) * 3).toFixed(0)} = ${rho.toFixed(4)}`,
+      `ρ = λ/μ = ${(kState?.total_lambda ?? 0).toFixed(1)} / ${((kState?.mu ?? 150) * 5).toFixed(0)} = ${rho.toFixed(4)}`,
       `Φ(ρ) = 1/(1+exp(-20(ρ-${(kState?.critical_rho ?? 0.85).toFixed(2)}))) = ${phi.toFixed(4)}`,
-      `L = $3.94 × ${irp?.failure_count ?? 0} = $${irp?.leakage_total?.toFixed(2) ?? "0.00"}`,
+      `L = $3.94 × ${irp?.failure_count ?? 0} = $${irp?.leakage_total?.toFixed(2) ?? "0.00"} (from ${kState?.inverse_reliability?.total_high ?? 0} hi-imp shipments)`,
       `Wq = ρ/(1-ρ) = ${(kState?.wq ?? 0).toFixed(4)}`,
       `x = [ρ, ρ_dot] · F=[[1,dt],[0,1]] · T+3 = ${kState?.kalman?.rho_t3?.toFixed(4) ?? "—"}`,
     ].forEach(f => { doc.text(f, 14, y); y += 6; });
