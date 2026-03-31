@@ -1,9 +1,3 @@
-"""
-SITI Intelligence — MIMI Kernel v2.0
-Fixed: Razorpay payment webhook, admin key provisioning, SSE live stream, 
-       hub control API, all endpoints documented in README
-"""
-
 from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Depends, Header
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
