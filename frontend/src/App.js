@@ -332,18 +332,32 @@ function HubCharts({ kState }) {
 }
 
 // ─── IRP TABLE ────────────────────────────────────────────────────────────────
+// ─── IRPTable: USES REAL BACKEND DATA (P1-5 fix) ─────────────────────────────
+// Replace the IRPTable function in App.js with this version.
+// The backend now returns inverse_reliability_per_hub with real hi/lo fail rates.
+
 function IRPTable({ kState }) {
   const perHub = kState?.inverse_reliability_per_hub ?? [];
+  if (perHub.length === 0) {
+    // Fallback: derive from global IRP if per-hub not ready yet
+    return (
+      <div style={{ background: "#0A0A0A", border: "1px solid #1F1F1F", padding: "14px 16px" }}>
+        <div style={{ fontSize: 9, color: "#D4D4D8", letterSpacing: "0.12em", marginBottom: 8 }}>
+          INVERSE RELIABILITY PARADOX — LOADING...
+        </div>
+      </div>
+    );
+  }
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.borderBright}` }}>
-      <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 8.5, color: C.text, letterSpacing: "0.1em" }}>INVERSE RELIABILITY PARADOX — PER HUB</div>
-        <div style={{ fontSize: 8, color: C.yellow, border: `1px solid ${C.yellow}44`, padding: "1px 6px" }}>IRP CONFIRMED</div>
+    <div style={{ background: "#0A0A0A", border: "1px solid #1F1F1F" }}>
+      <div style={{ padding: "8px 12px", borderBottom: "1px solid #1A1A1A", display: "flex", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 8.5, color: "#D4D4D8", letterSpacing: "0.1em" }}>INVERSE RELIABILITY PARADOX — PER HUB (REAL DATA)</div>
+        <div style={{ fontSize: 8, color: "#FFD60A", border: "1px solid #FFD60A44", padding: "1px 6px" }}>IRP CONFIRMED</div>
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 8.5, fontFamily: "'JetBrains Mono',monospace" }}>
         <thead>
           <tr>{["HUB", "ρ", "HI-IMP FAIL%", "LO-IMP FAIL%", "IRP GAP", "₹ IMPACT/YR"].map(h => (
-            <th key={h} style={{ padding: "6px 10px", textAlign: h === "HUB" ? "left" : "right", color: C.textDim, fontWeight: 400, fontSize: 7.5, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+            <th key={h} style={{ padding: "6px 10px", textAlign: h === "HUB" ? "left" : "right", color: "#555", fontWeight: 400, fontSize: 7.5, borderBottom: "1px solid #1A1A1A" }}>{h}</th>
           ))}</tr>
         </thead>
         <tbody>
@@ -354,21 +368,64 @@ function IRPTable({ kState }) {
             const gap = ((row.irp_gap ?? 0) * 100).toFixed(1);
             const impact = (row.annual_impact_cr ?? 0).toFixed(2);
             return (
-              <tr key={row.hub} style={{ borderBottom: `1px solid ${C.border}` }}>
-                <td style={{ padding: "7px 10px", color: C.gold, fontWeight: 700 }}>{row.hub}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: rho >= 0.85 ? C.red : C.text }}>{rho.toFixed(4)}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: C.red }}>{hiRate}%</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: C.blue }}>{loRate}%</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: C.yellow, fontWeight: 700 }}>+{gap}pp</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: C.green }}>₹{impact}Cr</td>
+              <tr key={row.hub} style={{ borderBottom: "1px solid #141414" }}>
+                <td style={{ padding: "7px 10px", color: "#FFB340", fontWeight: 700 }}>{row.hub}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: rho >= 0.85 ? "#FF3B30" : "#D4D4D8" }}>{rho.toFixed(4)}</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: "#FF3B30" }}>{hiRate}%</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: "#64D2FF" }}>{loRate}%</td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: "#FFD60A", fontWeight: 700 }}>
+                  {parseFloat(gap) > 0 ? "+" : ""}{gap}pp
+                </td>
+                <td style={{ padding: "7px 10px", textAlign: "right", color: "#32D74B" }}>₹{impact}Cr</td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      <div style={{ padding: "6px 12px", borderTop: "1px solid #141414", fontSize: 7.5, color: "#555" }}>
+        Source: Safexpress Case #02028317 · Leakage: $1.20 recovery + $2.74 CLV = $3.94/unit
+      </div>
     </div>
   );
 }
+/*
+  const ghostRef = useRef(null);
+  const ghostCountRef = useRef(0);
+  const isGhostModeRef = useRef(false);
+
+  const stopGhost = () => {
+    isGhostModeRef.current = false;
+    if (ghostRef.current) clearTimeout(ghostRef.current);
+    setIsGhostMode(false);
+    ghostCountRef.current = 0;
+  };
+
+  const startGhost = () => {
+    setIsGhostMode(true);
+    isGhostModeRef.current = true;
+    ghostCountRef.current = 0;
+
+    const triggerGhost = async () => {
+      if (!isGhostModeRef.current) return;
+      try {
+        await axios.post(`${API}/kernel/stream-batch?n=50`);
+        await onRefresh();
+      } catch (e) {
+        console.warn("Ghost tick failed:", e.message);
+      }
+      ghostCountRef.current++;
+      if (ghostCountRef.current >= 90) {
+        stopGhost();
+        return;
+      }
+      if (isGhostModeRef.current) {
+        ghostRef.current = setTimeout(triggerGhost, 1000);
+      }
+    };
+
+    triggerGhost();
+  };
+*/
 
 // ─── LIVE API STREAM PANEL ────────────────────────────────────────────────────
 function LiveAPIPanel({ apiBase }) {
