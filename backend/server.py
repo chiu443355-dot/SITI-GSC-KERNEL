@@ -49,6 +49,7 @@ HUB_META = {
 }
 
 MAX_CSV_BYTES = 50 * 1024 * 1024  # P2-2: 50MB hard limit
+MAX_TOTAL_ROWS = 1_000_000        # Tier 1 Guardrail: prevent OOM
 
 # ─── API KEY STORE ────────────────────────────────────────────────────────────
 _api_keys: dict = {}
@@ -799,6 +800,9 @@ async def upload_dataset(file: UploadFile = File(...), key_data: dict = Depends(
         df = _sanitize_numeric_columns(df)
         df = _fill_missing_with_means(df)
 
+        if len(df) > MAX_TOTAL_ROWS:
+            raise HTTPException(status_code=413, detail=f"Dataset exceeds {MAX_TOTAL_ROWS} rows. Upgrade to Enterprise for Delhivery-scale transitions.")
+
         tenant = key_data.get("client", "default")
         session = _get_session(tenant)
 
@@ -836,6 +840,9 @@ async def stream_batch(n: int = 100, key_data: dict = Depends(_verify_api_key)):
 
     # P1-7: cap n to prevent memory bomb
     n = min(n, 500)
+
+    if mimi.n_total + n > MAX_TOTAL_ROWS:
+        raise HTTPException(status_code=413, detail=f"Total dataset size would exceed {MAX_TOTAL_ROWS} rows. Please purge old data or upgrade to Enterprise tier.")
 
     rng = np.random.default_rng()
     rho_base = mimi.failure_rate()
