@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import os, re, logging, random, asyncio, json, time, hashlib, hmac
 import numpy as np
 import pandas as pd
+import os, re, logging, random, asyncio, json, time, hashlib, hmac, httpx
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from pathlib import Path
@@ -20,13 +21,16 @@ load_dotenv(ROOT_DIR / '.env')
 
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 db_name = os.environ.get('DB_NAME', 'siti_sovereign')
+# ─── NOTIFICATION CONFIG ──────────────────────────────────────────────────────
+TWILIO_SID   = os.environ.get("TWILIO_SID", "")
+TWILIO_TOKEN = os.environ.get("TWILIO_TOKEN", "")
+TWILIO_FROM  = os.environ.get("TWILIO_FROM", "whatsapp:+14155238886")
+TWILIO_TO    = os.environ.get("TWILIO_TO", "")  # your WhatsApp number
+SENDGRID_KEY = os.environ.get("SENDGRID_API_KEY", "") # Ensure this matches your .env
 
 # ─── LAZY MONGO INIT ──────────────────────────────────────────────────────────
 client = None
 db = None
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 # ─── CONSTANTS ────────────────────────────────────────────────────────────────
 T_OPERATIONAL = 36.0
@@ -1326,3 +1330,269 @@ async def health():
 
 # ─── APP SETUP ────────────────────────────────────────────────────────────────
 app.include_router(api_router)
+@api_router.post("/demo/upload")
+async def demo_upload(file: UploadFile = File(...)):
+    """
+    DEMO ENDPOINT — No API key required.
+    For sales demos and the demo video without needing auth.
+    Uses the default 'demo' session.
+    Limited to 100K rows.
+    """
+    try:
+        content = await file.read(MAX_CSV_BYTES + 1)
+        if len(content) > MAX_CSV_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds 50MB limit.")
+ 
+        df = _parse_csv_resilient(content)
+        df = _fuzzy_map_columns(df)
+ 
+        if 'Reached.on.Time_Y.N' not in df.columns:
+            raise HTTPException(status_code=400, detail={
+                "type": "SCHEMA_MISMATCH",
+                "found_columns": list(df.columns),
+                "required_unmapped": ["Reached.on.Time_Y.N"],
+                "message": "Could not auto-detect the on-time delivery column. Please rename it.",
+            })
+ 
+        col = df['Reached.on.Time_Y.N']
+        if col.dtype == object:
+            df['Reached.on.Time_Y.N'] = col.map(
+                lambda x: 1 if str(x).strip().upper() in ['Y', 'YES', '1', 'TRUE'] else 0
+            ).astype(int)
+        else:
+            df['Reached.on.Time_Y.N'] = pd.to_numeric(col, errors='coerce').fillna(0).astype(int)
+ 
+        if 'ID' not in df.columns:
+            df['ID'] = range(1, len(df) + 1)
+        for cat_col, default in [('Warehouse_block', 'A'), ('Mode_of_Shipment', 'Ship'),
+                                  ('Product_importance', 'Medium'), ('Gender', 'M')]:
+            if cat_col not in df.columns:
+                df[cat_col] = default
+ 
+        df = _sanitize_numeric_columns(df)
+        df = _fill_missing_with_means(df)
+ 
+        DEMO_MAX_ROWS = 100_000
+        if len(df) > DEMO_MAX_ROWS:
+            df = df.head(DEMO_MAX_ROWS)
+            logger.info(f"Demo upload truncated to {DEMO_MAX_ROWS} rows")
+ 
+        # Use a shared "demo" session
+        demo_session = _get_session("demo")
+        new_kernel = MIMIKernel(df, 150.0)
+        new_critical_rho = new_kernel.fit_lr()
+        demo_session["mimi"] = new_kernel
+        demo_session["diverted_units"] = 0
+        demo_session["revenue_saved"] = 0.0
+        demo_session["refresh_count"] = 0
+        demo_session["rho_history"] = []
+        demo_session["dataset_name"] = file.filename or "DEMO_DATASET"
+ 
+        g_rho = new_kernel.global_rho()
+        return {
+            "success": True, "n_total": len(df),
+            "new_rho": round(g_rho, 4), "new_critical_rho": new_critical_rho,
+            "message": f"MIMI Kernel demo session reinitialized. Global ρ={g_rho:.4f}",
+            "dataset_name": demo_session["dataset_name"],
+            "mode": "DEMO — No authentication required",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Demo upload error: {e}")
+        raise HTTPException(status_code=400, detail=f"CSV parse error: {str(e)}")
+ 
+ 
+# ── REPLACE the razorpay_webhook handler's end section ─────────────────────
+# After the MongoDB insert succeeds, ADD this block:
+ 
+async def _send_payment_notifications(new_key: str, client_name: str, email: str, 
+                                       plan: str, plan_data: dict, payment_id: str, amount: int):
+    """Send WhatsApp + Email notifications on successful payment."""
+    
+    # 1. WhatsApp to founder
+    if TWILIO_SID and TWILIO_TOKEN and TWILIO_TO:
+        try:
+            from twilio.rest import Client as TwilioClient
+            tc = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
+            msg_body = f"""🚀 *NEW SITI INTELLIGENCE PAYMENT!*
+ 
+💰 Plan: {plan_data['display']}
+👤 Client: {client_name}
+📧 Email: {email}
+💵 Amount: ₹{amount/100:,.0f}
+🔑 Payment ID: {payment_id}
+🔐 API Key (first 20): {new_key[:20]}...
+ 
+⚡ Client receives API key via email in seconds.
+ 
+Dashboard: https://dashboard.razorpay.com"""
+            tc.messages.create(from_=TWILIO_FROM, to=TWILIO_TO, body=msg_body)
+            logger.info(f"WhatsApp notification sent for {payment_id}")
+        except Exception as e:
+            logger.warning(f"WhatsApp notification failed (non-critical): {e}")
+ 
+    # 2. Email to client via SendGrid
+    if SENDGRID_KEY and email:
+        try:
+            import httpx
+            html_body = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {{ background: #050505; color: #D4D4D8; font-family: 'Courier New', monospace; margin: 0; padding: 0; }}
+  .container {{ max-width: 600px; margin: 40px auto; border: 1px solid #1F1F1F; }}
+  .header {{ background: #080808; border-bottom: 1px solid #1F1F1F; padding: 32px; text-align: center; }}
+  .logo-text {{ color: #FFB340; font-size: 24px; font-weight: bold; letter-spacing: 0.3em; }}
+  .tagline {{ color: #555; font-size: 10px; letter-spacing: 0.15em; margin-top: 4px; }}
+  .gold-bar {{ height: 4px; background: linear-gradient(90deg, transparent, #FFB340, transparent); }}
+  .body {{ padding: 32px; }}
+  .kpi {{ background: #0A0A0A; border: 1px solid #1F1F1F; padding: 16px; margin: 8px 0; display: flex; justify-content: space-between; }}
+  .kpi-label {{ color: #555; font-size: 10px; letter-spacing: 0.1em; }}
+  .kpi-value {{ color: #FFB340; font-size: 14px; font-weight: bold; }}
+  .api-key {{ background: #0A0A0A; border: 1px solid #FFB34044; padding: 20px; margin: 24px 0; font-family: monospace; }}
+  .api-key-label {{ color: #FFB340; font-size: 11px; letter-spacing: 0.15em; margin-bottom: 8px; }}
+  .api-key-value {{ color: #39FF14; font-size: 13px; word-break: break-all; font-weight: bold; }}
+  .cta {{ background: #FFB340; color: #000; padding: 14px 32px; text-decoration: none; font-weight: bold; font-size: 12px; letter-spacing: 0.15em; display: inline-block; margin: 16px 0; }}
+  .endpoint {{ background: #0A0A0A; border: 1px solid #1F1F1F; padding: 12px; margin: 8px 0; font-size: 10px; color: #64D2FF; }}
+  .footer {{ padding: 20px 32px; border-top: 1px solid #1F1F1F; text-align: center; color: #333; font-size: 9px; }}
+  h2 {{ color: #FFB340; font-size: 14px; letter-spacing: 0.2em; margin: 24px 0 12px; }}
+  p {{ color: #A1A1AA; font-size: 11px; line-height: 1.8; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="logo-text">SITI INTELLIGENCE</div>
+    <div class="tagline">LOGIC FOR THE PARADOX // POWERED BY MIMI v2.0</div>
+  </div>
+  <div class="gold-bar"></div>
+  <div class="body">
+    <p>Welcome to <strong style="color:#FFB340">SITI Intelligence</strong>. Your payment has been processed successfully. Your API key is ready.</p>
+    
+    <div class="kpi">
+      <div><div class="kpi-label">PLAN</div><div class="kpi-value">{plan_data['display']}</div></div>
+    </div>
+    <div class="kpi">
+      <div><div class="kpi-label">CLIENT</div><div class="kpi-value">{client_name.upper()}</div></div>
+    </div>
+    <div class="kpi">
+      <div><div class="kpi-label">PAYMENT ID</div><div class="kpi-value">{payment_id}</div></div>
+    </div>
+    <div class="kpi">
+      <div><div class="kpi-label">AMOUNT PAID</div><div class="kpi-value">₹{amount/100:,.0f}</div></div>
+    </div>
+    
+    <div class="api-key">
+      <div class="api-key-label">YOUR API KEY</div>
+      <div class="api-key-value">{new_key}</div>
+      <p style="margin-top:8px;color:#555;font-size:9px;">Keep this key confidential. Do not share it publicly.</p>
+    </div>
+    
+    <h2>QUICK START</h2>
+    <div class="endpoint">POST https://siti-intelligence-backend.onrender.com/api/v1/intercept</div>
+    <div class="endpoint">Header: X-API-KEY: {new_key}</div>
+    <div class="endpoint">GET https://siti-intelligence-backend.onrender.com/api/kernel/state</div>
+    
+    <h2>DASHBOARD</h2>
+    <p>Access your SITI Intelligence dashboard and upload your logistics data:</p>
+    <a href="https://siti-intelligence.vercel.app" class="cta">OPEN SITI INTELLIGENCE DASHBOARD →</a>
+    
+    <h2>WHAT'S NEXT</h2>
+    <p>1. Open the dashboard and click "DEMO / DATA INJECTION"<br>
+    2. Upload your logistics CSV (we auto-map messy headers)<br>
+    3. MIMI Kernel recalibrates in ~3 seconds<br>
+    4. Export your first Forensic Audit PDF<br>
+    5. Share with your operations team</p>
+    
+    <h2>SUPPORT</h2>
+    <p>Reply to this email or WhatsApp us: <strong style="color:#FFB340">+91 XXXXXXXXXX</strong><br>
+    We respond within 2 hours during business hours.</p>
+  </div>
+  <div class="footer">
+    SITI Intelligence · contact@siti-intelligence.io<br>
+    🌿 Mission LiFE Certified · © 2026 SITI Intelligence<br>
+    "We control the curve."
+  </div>
+</div>
+</body>
+</html>"""
+            
+            payload = {
+                "personalizations": [{"to": [{"email": email, "name": client_name}]}],
+                "from": {"email": "noreply@siti-intelligence.io", "name": "SITI Intelligence"},
+                "reply_to": {"email": "contact@siti-intelligence.io", "name": "SITI Intelligence Support"},
+                "subject": f"Your SITI Intelligence API Key — {plan_data['display']}",
+                "content": [
+                    {"type": "text/plain", "value": f"Welcome to SITI Intelligence!\n\nYour API Key: {new_key}\nPlan: {plan_data['display']}\n\nDashboard: https://siti-intelligence.vercel.app\nEndpoint: https://siti-intelligence-backend.onrender.com/api/v1/intercept\n\nSupport: contact@siti-intelligence.io"},
+                    {"type": "text/html", "value": html_body}
+                ]
+            }
+            async with httpx.AsyncClient() as c:
+                resp = await c.post(
+                    "https://api.sendgrid.com/v3/mail/send",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {SENDGRID_KEY}"},
+                    timeout=15.0,
+                )
+                if resp.status_code == 202:
+                    logger.info(f"Email sent to {email} for {payment_id}")
+                else:
+                    logger.warning(f"SendGrid returned {resp.status_code}: {resp.text}")
+        except Exception as e:
+            logger.warning(f"Email notification failed (non-critical): {e}")
+ 
+ 
+# ── In your razorpay_webhook function, after MongoDB insert, add: ────────────
+# asyncio.create_task(_send_payment_notifications(
+#     new_key, client_name, email, plan, plan_data, payment_id, amount
+# ))
+ 
+ 
+# ── CORS UPDATE — make sure this is in your server.py ──────────────────────
+# The CORS middleware should include:
+# allow_origins=["*"]  ← for demo mode to work from any origin
+# OR add your specific origins
+ 
+ 
+# ── DEMO SESSION STATE ENDPOINT ─────────────────────────────────────────────
+@api_router.get("/demo/state")
+async def demo_state():
+    """Get state for the demo session (no auth required)."""
+    demo_session = _get_session("demo")
+    if demo_session["mimi"] is None:
+        # Initialize with default dataset if no upload yet
+        default_session = _get_session("default")
+        if default_session["mimi"]:
+            demo_session["mimi"] = MIMIKernel(_generate_dataset(), 150.0)
+    
+    if demo_session["mimi"] is None:
+        raise HTTPException(status_code=503, detail="MIMI Kernel not initialized")
+    
+    state = _build_kernel_state(demo_session)
+    return state
+ 
+ 
+@api_router.post("/demo/tick")
+async def demo_tick():
+    """Tick for demo session (no auth required)."""
+    demo_session = _get_session("demo")
+    if demo_session["mimi"] is None:
+        demo_session["mimi"] = MIMIKernel(_generate_dataset(), 150.0)
+    
+    mimi = demo_session["mimi"]
+    g_rho = mimi.global_rho()
+    diverted = int(10 + g_rho * 20)
+    demo_session["diverted_units"] += diverted
+    demo_session["revenue_saved"] = demo_session["diverted_units"] * mimi.LEAKAGE_SEED
+    demo_session["refresh_count"] += 1
+    
+    return {
+        "diverted": diverted,
+        "total_diverted": demo_session["diverted_units"],
+        "revenue_saved": round(demo_session["revenue_saved"], 2),
+        "refresh_count": demo_session["refresh_count"],
+    }
+ 
