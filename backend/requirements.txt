@@ -1,13 +1,12 @@
 fastapi
 uvicorn
-gunicorn
+supabase==2.4.0
+httpx==0.24.1
+httpcore==0.17.3
 python-dotenv
 pandas
 numpy
 scikit-learn
-httpcore==1.0.2
-httpx<0.26.0
-supabase==2.3.4
 python-multipart
 starlette
 pydantic
