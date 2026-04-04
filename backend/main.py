@@ -233,6 +233,30 @@ def genius_reset():
     if "file" not in request.files:
         return jsonify({"error": "no file uploaded bestie. send a CSV in 'file' field"}), 400
 
+    # --- ROUTES ---
+@app.route('/')
+def home():
+    return {"status": "SITI Kernel Online", "version": "2.0"}
+
+@app.route('/health')
+def health():
+    return {"status": "healthy"}
+
+# --- OPENROUTER / AI ANALYSIS ---
+@app.route('/api/kernel/analyze', methods=['POST'])
+def analyze_logistics():
+    data = request.json
+    # This calls OpenRouter to explain the logistics failure in human terms
+    response = httpx.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}"},
+        json={
+            "model": "google/gemini-2.0-flash-001",
+            "messages": [{"role": "user", "content": f"Explain this delay: {data}"}]
+        }
+    }
+    return response.json()
+
     f = request.files["file"]
     if not f.filename.lower().endswith(".csv"):
         return jsonify({"error": "we need a .csv not a PDF 💀 convert it first"}), 400
