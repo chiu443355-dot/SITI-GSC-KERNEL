@@ -25,10 +25,19 @@ log = logging.getLogger("siti-kernel")
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": os.getenv("ALLOWED_ORIGINS", "*")}})
 
-# ── Supabase ──────────────────────────────────────────────────────────────────
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ── Supabase (lazy init so missing env vars don't crash gunicorn at startup) ──
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+supabase: Client | None = None
+
+def get_supabase() -> Client | None:
+    global supabase
+    if supabase is None and SUPABASE_URL and SUPABASE_KEY:
+        try:
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        except Exception as e:
+            log.error("Supabase init failed: %s", e)
+    return supabase
 
 # ── Twilio ────────────────────────────────────────────────────────────────────
 TWILIO_SID    = os.getenv("TWILIO_ACCOUNT_SID")
@@ -65,10 +74,11 @@ def require_api_key(fn):
         key = request.headers.get("X-API-Key") or request.args.get("api_key")
         if not key:
             return jsonify({"error": "missing API key bestie 🔑"}), 401
-        # Verify against Supabase api_keys table
-        res = supabase.table("api_keys").select("*").eq("key", key).eq("active", True).execute()
-        if not res.data:
-            return jsonify({"error": "invalid or inactive key 💀"}), 403
+        db = get_supabase()
+        if db:
+            res = db.table("api_keys").select("*").eq("key", key).eq("active", True).execute()
+            if not res.data:
+                return jsonify({"error": "invalid or inactive key 💀"}), 403
         return fn(*args, **kwargs)
     return wrapper
 
