@@ -8,9 +8,13 @@ const loadChartJS = () => new Promise((resolve) => {
   document.head.appendChild(s);
 });
 
-const API_BASE = process.env.REACT_APP_BACKEND_URL || "https://siti-gsc-kernel-1.onrender.com";
-const WA_NUMBER = process.env.REACT_APP_WA_NUMBER || "919999999999";
+const API_BASE  = process.env.REACT_APP_BACKEND_URL || "https://siti-gsc-kernel-1.onrender.com";
+const WA_NUMBER = "918956493671";   // Your WhatsApp number
+const WA_SUPPORT_MSG = encodeURIComponent(
+  "Hi! I came from SITI Intelligence. I'd like to know more about your logistics SaaS platform."
+);
 
+// ── Color palette ────────────────────────────────────────────────────────────
 const C = {
   bg: "#08080f", surface: "#0f0f1a", card: "#141422", cardHover: "#1a1a2e",
   border: "#1e1e35", borderHi: "#2e2e50", accent: "#5b5bd6", accentLt: "#818cf8",
@@ -20,15 +24,14 @@ const C = {
 
 const FONTS = `@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');`;
 
-// ─── FIX 1: Correct Razorpay amounts + correct pricing ──────────────────────
-// FIX 2: Enterprise → WhatsApp (razorpayAmount: null signals WA redirect)
-// FIX 4: price field on Enterprise was `price: ,` (syntax error) → fixed to null
+// ── Pricing plans (Cashfree) ─────────────────────────────────────────────────
 const PLANS = [
   {
     id: "pilot",
     name: "Pilot",
     badge: "Start Here",
     priceLabel: "₹9,999",
+    priceNum: 9999,
     period: "/month",
     tagline: "30-day proof of value. No commitment.",
     calls: "5,000 API calls",
@@ -42,7 +45,6 @@ const PLANS = [
       "Upgrade anytime, no penalty",
     ],
     color: C.teal,
-    razorpayAmount: 999900,   // ✓ FIXED: ₹9,999 = 999900 paise
     recommended: false,
     cta: "Start Pilot →",
   },
@@ -51,6 +53,7 @@ const PLANS = [
     name: "Growth",
     badge: "Most Popular",
     priceLabel: "₹45,999",
+    priceNum: 45999,
     period: "/month",
     tagline: "For 3PLs processing 10K–500K shipments/month.",
     calls: "1,00,000 API calls",
@@ -59,13 +62,12 @@ const PLANS = [
     features: [
       "Everything in Pilot",
       "Twilio SMS alerts — human-readable",
-      "OpenRouter AI failure explanation",
+      "AI failure explanation",
       "Real-time hub dashboard",
       "Priority support within 12h",
       "Dedicated API key per tenant",
     ],
     color: C.accent,
-    razorpayAmount: 4599900,   // ✓ FIXED: ₹45,999 = 4599900 paise
     recommended: true,
     cta: "Activate Growth →",
   },
@@ -73,7 +75,8 @@ const PLANS = [
     id: "enterprise",
     name: "Enterprise",
     badge: "Custom",
-    priceLabel: "₹75,000+",   // ✓ FIXED: was ₹49,999 which Gemini correctly called out as too cheap
+    priceLabel: "₹75,000+",
+    priceNum: null,
     period: "/month",
     tagline: "Dedicated instance. SLA-backed. Built for scale.",
     calls: "Unlimited calls",
@@ -88,20 +91,13 @@ const PLANS = [
       "Direct engineering line",
     ],
     color: C.amber,
-    razorpayAmount: null,      // ✓ FIXED: null → triggers WhatsApp redirect, not Razorpay
     recommended: false,
     cta: "WhatsApp Us →",
   },
 ];
 
-// ROI anchor shown on pricing page — makes the price feel cheap vs value
-const ROI = {
-  shipments: 50000,
-  delayRate: 0.12,
-  avgDelayCost: 1200,
-  sitiReduction: 0.15,
-};
-const roiSavings = Math.round(ROI.shipments * ROI.delayRate * ROI.avgDelayCost * ROI.sitiReduction);
+// ROI anchor
+const ROI_SAVINGS = Math.round(50000 * 0.12 * 1200 * 0.15);
 
 const MOCK_HUBS = [
   { id: "MUM-CENTRAL", rho: 1.12, mu: 420, queue: 847, risk: "critical", shipments: 12400, delayed: 2890 },
@@ -112,6 +108,7 @@ const MOCK_HUBS = [
   { id: "PUN-NORTH-01", rho: 0.78, mu: 890, queue: 240, risk: "warning", shipments: 6200, delayed: 480 },
 ];
 
+// Kalman mock data
 const MOCK_KALMAN = (() => {
   const pts = 48; const raw = [], smoothed = [], predicted = [];
   let k = 0.5, P = 1;
@@ -128,6 +125,7 @@ const MOCK_KALMAN = (() => {
 const riskColor = (r) => r === "critical" ? C.coral : r === "warning" ? C.amber : C.emerald;
 const riskIcon  = (r) => r === "critical" ? "⬤" : r === "warning" ? "▲" : "●";
 
+// ── Small components ──────────────────────────────────────────────────────────
 function Badge({ label, color }) {
   return <span style={{ background: color + "20", color, border: `1px solid ${color}40`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 600 }}>{label}</span>;
 }
@@ -143,6 +141,7 @@ function StatCard({ label, value, sub, color = C.accentLt }) {
   );
 }
 
+// ── Charts ───────────────────────────────────────────────────────────────────
 function PieChart({ data, colors, labels, title, subtitle }) {
   const ref = useRef(null); const chartRef = useRef(null);
   useEffect(() => {
@@ -156,7 +155,7 @@ function PieChart({ data, colors, labels, title, subtitle }) {
           responsive: true, maintainAspectRatio: false, cutout: "68%",
           plugins: {
             legend: { display: false },
-            tooltip: { backgroundColor: C.card, borderColor: C.borderHi, borderWidth: 1, titleColor: C.text, bodyColor: C.muted, padding: 12, callbacks: { label: (ctx) => ` ${ctx.label}: ${ctx.parsed.toLocaleString()}` } },
+            tooltip: { backgroundColor: C.card, borderColor: C.borderHi, borderWidth: 1, titleColor: C.text, bodyColor: C.muted, padding: 12 },
           },
         },
       });
@@ -250,7 +249,7 @@ function HubBarChart() {
   return <canvas ref={ref} />;
 }
 
-// ─── FIX 3: CSV column mapping UI for Kaggle/Delhivery mismatched columns ────
+// ── CSV Upload Panel (wired to /api/kernel/reset) ─────────────────────────────
 function CSVUploadPanel({ apiKey }) {
   const [drag, setDrag] = useState(false);
   const [file, setFile] = useState(null);
@@ -271,15 +270,13 @@ function CSVUploadPanel({ apiKey }) {
       const headers = lines[0].split(",").map(h => h.trim().replace(/"/g, ""));
       setCsvHeaders(headers);
       setPreview(lines.slice(0, 6));
-      // Auto-map if column names match exactly
       const autoMap = {};
       REQUIRED_COLS.forEach(col => {
         if (headers.includes(col)) autoMap[col] = col;
         else autoMap[col] = "";
       });
       setMapping(autoMap);
-      const needsMapping = REQUIRED_COLS.some(col => !headers.includes(col));
-      setShowMapping(needsMapping);
+      setShowMapping(REQUIRED_COLS.some(col => !headers.includes(col)));
     };
     reader.readAsText(f);
   };
@@ -293,19 +290,21 @@ function CSVUploadPanel({ apiKey }) {
   const handleUpload = async () => {
     if (!file) return;
     const unmapped = REQUIRED_COLS.filter(col => !mapping[col]);
-    if (unmapped.length > 0) { setStatus({ type: "error", msg: `Please map these columns first: ${unmapped.join(", ")}` }); return; }
+    if (unmapped.length > 0 && csvHeaders.length > 0 && !csvHeaders.some(h => REQUIRED_COLS.includes(h))) {
+      setStatus({ type: "error", msg: `Please map these columns first: ${unmapped.join(", ")}` });
+      return;
+    }
 
     setUploading(true);
-    setStatus({ type: "loading", msg: "Remapping columns and running IRP analysis..." });
+    setStatus({ type: "loading", msg: "Running IRP analysis..." });
 
-    // If columns need remapping, rebuild CSV with correct headers
     let uploadFile = file;
-    const needsRemap = REQUIRED_COLS.some(col => mapping[col] !== col);
+    const needsRemap = REQUIRED_COLS.some(col => mapping[col] && mapping[col] !== col);
     if (needsRemap) {
       const reader = new FileReader();
       const csvText = await new Promise(res => { reader.onload = e => res(e.target.result); reader.readAsText(file); });
       const lines = csvText.split("\n");
-      const origHeaders = lines[0].split(",").map(h => h.trim().replace(/"/g, ""));
+      const origHeaders = lines[0].split(",").map(h => h.trim().replace(/^["']|["']$/g, ""));
       const newHeaders = origHeaders.map(h => {
         const found = Object.entries(mapping).find(([newCol, oldCol]) => oldCol === h);
         return found ? found[0] : h;
@@ -319,12 +318,15 @@ function CSVUploadPanel({ apiKey }) {
     try {
       const res = await fetch(`${API_BASE}/api/kernel/reset`, {
         method: "POST",
-        headers: { "X-API-Key": apiKey || "demo-key", "X-Tenant-ID": "default" },
+        headers: {
+          "X-API-Key":   apiKey || "siti-admin-key-001",
+          "X-Tenant-ID": "default",
+        },
         body: form,
       });
       const json = await res.json();
       if (res.ok) {
-        setStatus({ type: "success", msg: `Analysis complete. ${json.summary?.total_rows?.toLocaleString() || "—"} rows processed across ${json.summary?.hub_count || "—"} hubs.` });
+        setStatus({ type: "success", msg: `Analysis complete. ${json.summary?.total_rows?.toLocaleString() || "—"} rows, ${json.summary?.hub_count || "—"} hubs.` });
         setResult(json.summary);
       } else {
         setStatus({ type: "error", msg: json.error || "Upload failed." });
@@ -342,7 +344,7 @@ function CSVUploadPanel({ apiKey }) {
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files[0]); }}
-        onClick={() => document.getElementById("csv-file").click()}
+        onClick={() => document.getElementById("csv-file-main").click()}
         style={{ border: `2px dashed ${drag ? C.teal : file ? C.accent : C.border}`, borderRadius: 14, padding: "40px 24px", textAlign: "center", cursor: "pointer", background: drag ? C.teal + "08" : file ? C.accent + "08" : "transparent", transition: "all 0.2s" }}
       >
         <div style={{ fontSize: 36, marginBottom: 12 }}>📡</div>
@@ -357,26 +359,18 @@ function CSVUploadPanel({ apiKey }) {
             <div style={{ color: C.muted, fontSize: 13 }}>Kaggle Delhivery CSV, smart_logistics_dataset.csv, or any hub data</div>
           </>
         )}
-        <input id="csv-file" type="file" accept=".csv" style={{ display: "none" }} onChange={(e) => handleFile(e.target.files[0])} />
+        <input id="csv-file-main" type="file" accept=".csv" style={{ display: "none" }} onChange={(e) => handleFile(e.target.files[0])} />
       </div>
 
       {showMapping && csvHeaders.length > 0 && (
         <div style={{ background: C.surface, border: `1px solid ${C.amber}44`, borderRadius: 12, padding: "16px" }}>
-          <div style={{ color: C.amber, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 12 }}>
-            Column Mapping Required
-          </div>
-          <div style={{ color: C.muted, fontSize: 12, marginBottom: 14 }}>
-            Your CSV has different column names. Map them to SITI's required fields:
-          </div>
+          <div style={{ color: C.amber, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 12 }}>Column Mapping Required</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             {REQUIRED_COLS.map(col => (
               <div key={col} style={{ background: C.card, borderRadius: 8, padding: "12px" }}>
                 <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: C.accentLt, marginBottom: 6 }}>SITI: {col}</div>
-                <select
-                  value={mapping[col]}
-                  onChange={(e) => setMapping(m => ({ ...m, [col]: e.target.value }))}
-                  style={{ width: "100%", background: C.surface, border: `1px solid ${mapping[col] ? C.emerald + "66" : C.border}`, borderRadius: 6, padding: "7px 10px", color: mapping[col] ? C.text : C.muted, fontSize: 12, fontFamily: "JetBrains Mono, monospace", cursor: "pointer" }}
-                >
+                <select value={mapping[col]} onChange={(e) => setMapping(m => ({ ...m, [col]: e.target.value }))}
+                  style={{ width: "100%", background: C.surface, border: `1px solid ${mapping[col] ? C.emerald + "66" : C.border}`, borderRadius: 6, padding: "7px 10px", color: mapping[col] ? C.text : C.muted, fontSize: 12, cursor: "pointer" }}>
                   <option value="">— select column —</option>
                   {csvHeaders.map(h => <option key={h} value={h}>{h}</option>)}
                 </select>
@@ -406,8 +400,8 @@ function CSVUploadPanel({ apiKey }) {
       {result && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
           {[
-            { label: "Total Rows", value: result.total_rows?.toLocaleString() || "—" },
-            { label: "Hubs Scanned", value: result.hub_count || "—" },
+            { label: "Total Rows",    value: result.total_rows?.toLocaleString() || "—" },
+            { label: "Hubs Scanned",  value: result.hub_count || "—" },
             { label: "Critical Hubs", value: result.hubs?.filter(h => h.risk === "critical").length || 0 },
           ].map((s, i) => (
             <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px", textAlign: "center" }}>
@@ -421,16 +415,19 @@ function CSVUploadPanel({ apiKey }) {
   );
 }
 
-function loadRazorpay() {
+// ── Cashfree Payment ──────────────────────────────────────────────────────────
+async function loadCashfree() {
+  if (window.Cashfree) return true;
   return new Promise((resolve) => {
-    if (window.Razorpay) return resolve(true);
     const s = document.createElement("script");
-    s.src = "https://checkout.razorpay.com/v1/checkout.js";
-    s.onload = () => resolve(true); s.onerror = () => resolve(false);
+    s.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
     document.head.appendChild(s);
   });
 }
 
+// ── Pricing Card ──────────────────────────────────────────────────────────────
 function PricingCard({ plan, onBuy }) {
   return (
     <div
@@ -457,18 +454,17 @@ function PricingCard({ plan, onBuy }) {
           </div>
         ))}
       </div>
-      <button
-        onClick={() => onBuy(plan)}
+      <button onClick={() => onBuy(plan)}
         style={{ width: "100%", background: plan.recommended ? plan.color : "transparent", border: `1.5px solid ${plan.color}`, borderRadius: 10, padding: "13px", color: plan.recommended ? "white" : plan.color, fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s" }}
         onMouseEnter={e => { if (!plan.recommended) e.currentTarget.style.background = plan.color + "20"; }}
-        onMouseLeave={e => { if (!plan.recommended) e.currentTarget.style.background = "transparent"; }}
-      >
+        onMouseLeave={e => { if (!plan.recommended) e.currentTarget.style.background = "transparent"; }}>
         {plan.cta}
       </button>
     </div>
   );
 }
 
+// ── Hub Table ─────────────────────────────────────────────────────────────────
 function HubTable() {
   return (
     <div style={{ overflowX: "auto" }}>
@@ -487,8 +483,7 @@ function HubTable() {
             return (
               <tr key={i} style={{ borderBottom: `1px solid ${C.border}15`, transition: "background 0.15s" }}
                 onMouseEnter={e => e.currentTarget.style.background = C.cardHover}
-                onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-              >
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
                 <td style={{ padding: "12px 14px", color: C.text, fontFamily: "JetBrains Mono, monospace", fontSize: 12 }}>{hub.id}</td>
                 <td style={{ padding: "12px 14px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -517,6 +512,7 @@ function HubTable() {
   );
 }
 
+// ── API Key Card ──────────────────────────────────────────────────────────────
 function APIKeyCard({ apiKey }) {
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -542,12 +538,105 @@ function APIKeyCard({ apiKey }) {
   );
 }
 
+// ── Contact / WhatsApp Section ────────────────────────────────────────────────
+function ContactSection() {
+  const [name, setName] = useState("");
+  const [company, setCompany] = useState("");
+  const [message, setMessage] = useState("");
+
+  const sendToWhatsApp = () => {
+    const msg = encodeURIComponent(
+      `Hi! I'm ${name || "a visitor"} from ${company || "a logistics company"}.\n\n${message || "I'd like to know more about SITI Intelligence."}\n\n— via SITI Intelligence website`
+    );
+    window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
+  };
+
+  return (
+    <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ textAlign: "center" }}>
+        <h2 style={{ fontSize: 28, fontWeight: 800, margin: "0 0 8px" }}>Get in Touch</h2>
+        <p style={{ color: C.muted, fontSize: 14, margin: 0 }}>Questions about SITI Intelligence? We respond within 2 hours on WhatsApp.</p>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        {/* Contact Form */}
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "24px", display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>Send us a message</div>
+          {[
+            { label: "Your Name", val: name, set: setName, placeholder: "Priya Sharma" },
+            { label: "Company", val: company, set: setCompany, placeholder: "Safexpress / Gati / Your 3PL" },
+          ].map(({ label, val, set, placeholder }) => (
+            <div key={label}>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{label}</div>
+              <input value={val} onChange={e => set(e.target.value)} placeholder={placeholder}
+                style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 14px", color: C.text, fontSize: 13, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} />
+            </div>
+          ))}
+          <div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Message</div>
+            <textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="I want to run SITI on our shipment data..."
+              rows={4} style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 14px", color: C.text, fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", boxSizing: "border-box" }} />
+          </div>
+          <button onClick={sendToWhatsApp}
+            style={{ background: "#25D366", border: "none", borderRadius: 10, padding: "13px", color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            💬 Send via WhatsApp
+          </button>
+        </div>
+
+        {/* Direct Contact Cards */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {[
+            {
+              icon: "💬",
+              title: "WhatsApp (Fastest)",
+              desc: "Response within 2 hours, 9 AM – 9 PM IST",
+              action: "Chat Now",
+              color: "#25D366",
+              href: `https://wa.me/${WA_NUMBER}?text=${WA_SUPPORT_MSG}`,
+            },
+            {
+              icon: "📧",
+              title: "Email",
+              desc: "support@siti.ai — Response within 24 hours",
+              action: "Send Email",
+              color: C.accentLt,
+              href: "mailto:support@siti.ai?subject=SITI Intelligence Enquiry",
+            },
+            {
+              icon: "🏢",
+              title: "Enterprise Demo",
+              desc: "Book a 30-min live demo for your ops team",
+              action: "Book Demo",
+              color: C.amber,
+              href: `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent("Hi! I'd like to book a live demo of SITI Intelligence for our enterprise logistics team.")}`,
+            },
+          ].map((item, i) => (
+            <a key={i} href={item.href} target="_blank" rel="noreferrer"
+              style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "18px", display: "flex", gap: 14, alignItems: "center", textDecoration: "none", transition: "border-color 0.2s, transform 0.2s" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = item.color + "66"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.transform = ""; }}>
+              <span style={{ fontSize: 28, flexShrink: 0 }}>{item.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 3 }}>{item.title}</div>
+                <div style={{ fontSize: 12, color: C.muted }}>{item.desc}</div>
+              </div>
+              <span style={{ color: item.color, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{item.action} →</span>
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("dashboard");
   const [kernelStatus, setKernelStatus] = useState("Connecting");
   const [apiKey] = useState("siti-admin-key-001");
   const [purchasedKey, setPurchasedKey] = useState(null);
   const [paymentStatus, setPaymentStatus] = useState(null);
+  const [alertTestResult, setAlertTestResult] = useState(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/health`)
@@ -555,39 +644,86 @@ export default function App() {
       .catch(() => setKernelStatus("Offline"));
   }, []);
 
-  // ─── FIX 2: Enterprise → WhatsApp, others → Razorpay ──────────────────────
+  // ── Cashfree payment handler ─────────────────────────────────────────────
   const handleBuy = async (plan) => {
-    if (plan.id === "enterprise" || plan.razorpayAmount === null) {
-      const msg = encodeURIComponent("Hi, I'm interested in SITI Enterprise — unlimited shipments, dedicated kernel, SLA. Please share details.");
+    if (plan.id === "enterprise" || plan.priceNum === null) {
+      const msg = encodeURIComponent(
+        `Hi! I'm interested in SITI Intelligence Enterprise plan (₹75,000+/month). Unlimited shipments, dedicated kernel, SLA. Please share details and pricing.`
+      );
       window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
       return;
     }
-    const ok = await loadRazorpay();
-    if (!ok) { alert("Could not load payment gateway. Please try again."); return; }
-    new window.Razorpay({
-      key: process.env.REACT_APP_RAZORPAY_KEY || "rzp_test_YourKeyHere",
-      amount: plan.razorpayAmount,   // ✓ Already corrected in PLANS above
-      currency: "INR",
-      name: "SITI Intelligence",
-      description: `${plan.name} Plan — API Access`,
-      handler: (response) => {
-        const generatedKey = `siti-${plan.id}-${Date.now().toString(36).toUpperCase()}`;
-        setPurchasedKey(generatedKey);
-        setPaymentStatus({ plan: plan.name, paymentId: response.razorpay_payment_id });
-        setTab("keys");
-      },
-      prefill: { name: "", email: "", contact: "" },
-      theme: { color: plan.color },
-    }).open();
+
+    // Cashfree integration
+    // Step 1: Create order on your backend
+    try {
+      const orderRes = await fetch(`${API_BASE}/api/payments/create-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": "siti-admin-key-001" },
+        body: JSON.stringify({ plan: plan.id, amount: plan.priceNum }),
+      });
+
+      if (orderRes.ok) {
+        const orderData = await orderRes.json();
+        const ok = await loadCashfree();
+        if (!ok) { alert("Payment gateway failed to load. Please try again."); return; }
+
+        const cashfree = new window.Cashfree({ mode: "production" }); // use "sandbox" for testing
+        cashfree.checkout({
+          paymentSessionId: orderData.payment_session_id,
+          returnUrl:        `${window.location.origin}?payment=success&plan=${plan.id}`,
+        });
+      } else {
+        // Fallback: direct WhatsApp for payment
+        const msg = encodeURIComponent(
+          `Hi! I want to purchase the SITI Intelligence ${plan.name} plan at ${plan.priceLabel}/month. Please help me complete the payment.`
+        );
+        window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
+      }
+    } catch {
+      // Payment backend not set up yet — route to WhatsApp
+      const msg = encodeURIComponent(
+        `Hi! I want to purchase the SITI Intelligence ${plan.name} plan (${plan.priceLabel}/month). Please help me get started.`
+      );
+      window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
+    }
+  };
+
+  // Check for payment return
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") === "success") {
+      const planId  = params.get("plan") || "pilot";
+      const fakeKey = `siti-${planId}-${Date.now().toString(36).toUpperCase()}`;
+      setPurchasedKey(fakeKey);
+      setPaymentStatus({ plan: planId });
+      setTab("keys");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  const testTwilioAlert = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/alerts/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+        body: JSON.stringify({ channel: "sms", message: "✅ SITI Alert test — Your Twilio SMS is working!" }),
+      });
+      const data = await res.json();
+      setAlertTestResult(data);
+    } catch (e) {
+      setAlertTestResult({ error: e.message });
+    }
   };
 
   const TABS = [
     { id: "dashboard", label: "Dashboard" },
     { id: "analytics", label: "Analytics" },
     { id: "upload",    label: "CSV Upload" },
-    { id: "pricing",   label: "API Pricing" },
+    { id: "pricing",   label: "Pricing" },
     { id: "keys",      label: "API Keys" },
     { id: "docs",      label: "Docs" },
+    { id: "contact",   label: "Contact" },
   ];
 
   const statusColor = kernelStatus === "Online" ? C.emerald : kernelStatus === "Offline" ? C.coral : C.amber;
@@ -596,27 +732,36 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'Syne', sans-serif" }}>
       <style>{FONTS}</style>
 
+      {/* Nav */}
       <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 24px", display: "flex", alignItems: "center", height: 58, gap: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
             <div style={{ width: 30, height: 30, borderRadius: 8, background: `linear-gradient(135deg, ${C.accent} 0%, ${C.teal} 100%)`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 14 }}>S</div>
             <span style={{ fontWeight: 800, fontSize: 16, letterSpacing: "-0.3px" }}>SITI Intelligence</span>
-            <span style={{ color: C.muted, fontSize: 11, fontFamily: "JetBrains Mono, monospace" }}>v2.0</span>
+            <span style={{ color: C.muted, fontSize: 11, fontFamily: "JetBrains Mono, monospace" }}>v3.0</span>
           </div>
-          <div style={{ display: "flex", gap: 2, flex: 1 }}>
+          <div style={{ display: "flex", gap: 2, flex: 1, overflowX: "auto" }}>
             {TABS.map(t => (
               <button key={t.id} onClick={() => setTab(t.id)} style={{ background: tab === t.id ? C.accent + "20" : "transparent", border: "none", borderBottom: `2px solid ${tab === t.id ? C.accent : "transparent"}`, color: tab === t.id ? C.accentLt : C.muted, padding: "10px 14px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: tab === t.id ? 600 : 400, transition: "all 0.15s", whiteSpace: "nowrap" }}>{t.label}</button>
             ))}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: statusColor, flexShrink: 0 }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor", display: "inline-block" }} />
-            Kernel {kernelStatus}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+            <a href={`https://wa.me/${WA_NUMBER}?text=${WA_SUPPORT_MSG}`} target="_blank" rel="noreferrer"
+              style={{ background: "#25D366", border: "none", borderRadius: 8, padding: "6px 14px", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", textDecoration: "none", display: "flex", alignItems: "center", gap: 5 }}>
+              💬 WhatsApp
+            </a>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: statusColor }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor", display: "inline-block" }} />
+              {kernelStatus}
+            </div>
           </div>
         </div>
       </div>
 
+      {/* Content */}
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "28px 24px" }}>
 
+        {/* DASHBOARD */}
         {tab === "dashboard" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
             <div>
@@ -651,9 +796,9 @@ export default function App() {
               <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>The Mathematics Behind SITI</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                 {[
-                  { label: "Load Factor ρ", formula: "λ / μ", color: C.coral, desc: "Arrival rate λ divided by service rate μ. When ρ > 1.0, the hub is overloaded — shipments accumulate faster than processed." },
-                  { label: "IRP Score", formula: "φ · ln(N + 1)", color: C.accentLt, desc: "At scale N, the phi-weighted logarithmic term captures non-linear reliability degradation. This is SITI's original research." },
-                  { label: "Kalman State", formula: "x̂ₜ + K(zₜ − x̂ₜ)", color: C.teal, desc: "Optimal state estimate updated by Kalman gain K, blending prior prediction x̂ₜ with noisy sensor observation zₜ." },
+                  { label: "Load Factor ρ", formula: "λ / μ", color: C.coral, desc: "Arrival rate λ divided by service rate μ. When ρ > 1.0, the hub is overloaded." },
+                  { label: "IRP Score", formula: "φ · ln(N + 1)", color: C.accentLt, desc: "At scale N, phi-weighted logarithmic term captures non-linear reliability degradation." },
+                  { label: "Kalman State", formula: "x̂ₜ + K(zₜ − x̂ₜ)", color: C.teal, desc: "Optimal state estimate updated by Kalman gain K, blending prediction with sensor data." },
                 ].map((m, i) => (
                   <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "18px" }}>
                     <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>{m.label}</div>
@@ -666,6 +811,7 @@ export default function App() {
           </div>
         )}
 
+        {/* ANALYTICS */}
         {tab === "analytics" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
             <div>
@@ -675,7 +821,7 @@ export default function App() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
               {MOCK_HUBS.slice(0, 3).map((hub, i) => {
                 const rc = riskColor(hub.risk);
-                const delayPct = ((hub.delayed / hub.shipments) * 100).toFixed(1);
+                const dp = ((hub.delayed / hub.shipments) * 100).toFixed(1);
                 return (
                   <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "18px", position: "relative", overflow: "hidden" }}>
                     <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: rc }} />
@@ -684,7 +830,7 @@ export default function App() {
                       <Badge label={hub.risk.toUpperCase()} color={rc} />
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                      {[{ k: "Load ρ", v: hub.rho.toFixed(2), c: rc }, { k: "Capacity μ", v: hub.mu.toLocaleString(), c: C.muted }, { k: "Queue", v: hub.queue.toLocaleString(), c: C.text }, { k: "Delay", v: `${delayPct}%`, c: rc }].map((s, j) => (
+                      {[{ k: "Load ρ", v: hub.rho.toFixed(2), c: rc }, { k: "Capacity μ", v: hub.mu.toLocaleString(), c: C.muted }, { k: "Queue", v: hub.queue.toLocaleString(), c: C.text }, { k: "Delay", v: `${dp}%`, c: rc }].map((s, j) => (
                         <div key={j}>
                           <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 3 }}>{s.k}</div>
                           <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 16, fontWeight: 600, color: s.c }}>{s.v}</div>
@@ -697,7 +843,7 @@ export default function App() {
             </div>
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px" }}>
               <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Shipment Volume by Hub</div>
-              <div style={{ color: C.muted, fontSize: 12, marginBottom: 16 }}>On-time vs delayed breakdown across all monitored hubs</div>
+              <div style={{ color: C.muted, fontSize: 12, marginBottom: 16 }}>On-time vs delayed breakdown</div>
               <div style={{ height: 240 }}><HubBarChart /></div>
             </div>
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "8px 0" }}>
@@ -707,6 +853,7 @@ export default function App() {
           </div>
         )}
 
+        {/* CSV UPLOAD */}
         {tab === "upload" && (
           <div style={{ maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
             <div>
@@ -717,91 +864,77 @@ export default function App() {
               <CSVUploadPanel apiKey={apiKey} />
             </div>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px" }}>
-              <div style={{ color: C.amber, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 12 }}>Kaggle / Delhivery column examples</div>
+              <div style={{ color: C.amber, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 12 }}>Required columns (any naming)</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {[
-                  { siti: "hub_id", kaggle: "Asset_ID, hub_code, facility_id" },
-                  { siti: "shipment_id", kaggle: "Shipment_ID, order_id, tracking_no" },
+                  { siti: "hub_id",       kaggle: "block, hub_code, facility_id, wh_block" },
+                  { siti: "shipment_id",  kaggle: "ID, order_id, awb, tracking_no" },
                   { siti: "arrival_rate", kaggle: "lambda, arrival_count, inbound_rate" },
                   { siti: "service_rate", kaggle: "mu, processing_rate, throughput" },
                 ].map((c, i) => (
                   <div key={i} style={{ background: C.card, borderRadius: 8, padding: "12px 14px" }}>
                     <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: C.accentLt, marginBottom: 4 }}>SITI: {c.siti}</div>
-                    <div style={{ color: C.muted, fontSize: 11 }}>Common names: {c.kaggle}</div>
+                    <div style={{ color: C.muted, fontSize: 11 }}>Common: {c.kaggle}</div>
                   </div>
                 ))}
               </div>
             </div>
+
+            {/* Twilio Alert Test */}
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8, color: C.text }}>Test Twilio Alerts</div>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 14, lineHeight: 1.7 }}>
+                Send a test SMS to verify your Twilio configuration is working. Configure <code style={{ color: C.accentLt }}>TWILIO_FROM_NUMBER</code> and <code style={{ color: C.accentLt }}>TWILIO_ALERT_NUMBER</code> in Render env vars.
+              </div>
+              <button onClick={testTwilioAlert}
+                style={{ background: C.surface, border: `1px solid ${C.accent}`, borderRadius: 8, padding: "10px 20px", color: C.accentLt, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                📱 Send Test SMS
+              </button>
+              {alertTestResult && (
+                <div style={{ marginTop: 12, padding: "10px 14px", background: alertTestResult.result?.sent ? C.emerald + "15" : C.coral + "15", border: `1px solid ${alertTestResult.result?.sent ? C.emerald : C.coral}33`, borderRadius: 8, fontSize: 12, color: alertTestResult.result?.sent ? C.emerald : C.coral, fontFamily: "JetBrains Mono, monospace" }}>
+                  {JSON.stringify(alertTestResult, null, 2)}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
+        {/* PRICING */}
         {tab === "pricing" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
             <div style={{ textAlign: "center" }}>
               <h2 style={{ fontSize: 28, fontWeight: 800, margin: "0 0 8px" }}>API Access Pricing</h2>
-              <p style={{ color: C.muted, fontSize: 14, margin: "0 0 0" }}>Value-based pricing for 3PL operations. No contracts. Cancel anytime.</p>
+              <p style={{ color: C.muted, fontSize: 14, margin: 0 }}>Value-based pricing for 3PL operations. No contracts. Cancel anytime.</p>
             </div>
-
-            {/* ROI anchor — makes price feel cheap */}
             <div style={{ background: C.emerald + "10", border: `1px solid ${C.emerald}30`, borderRadius: 14, padding: "20px 24px", display: "flex", alignItems: "center", gap: 24 }}>
               <div style={{ fontSize: 32 }}>📊</div>
               <div style={{ flex: 1 }}>
                 <div style={{ color: C.emerald, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>The ROI Calculation</div>
                 <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.7 }}>
                   A 3PL with 50,000 shipments/month at 12% delay rate saves approximately{" "}
-                  <span style={{ color: C.text, fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>₹{roiSavings.toLocaleString()}/month</span>{" "}
+                  <span style={{ color: C.text, fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>₹{ROI_SAVINGS.toLocaleString()}/month</span>{" "}
                   with a 15% delay reduction from SITI. Growth plan costs ₹45,999. That's{" "}
                   <span style={{ color: C.emerald, fontWeight: 700 }}>7× ROI</span> on month one.
                 </div>
               </div>
             </div>
-
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18 }}>
               {PLANS.map(plan => <PricingCard key={plan.id} plan={plan} onBuy={handleBuy} />)}
             </div>
-
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "24px" }}>
-              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>Compare Plans</div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                    <th style={{ padding: "10px 16px", textAlign: "left", color: C.muted, fontWeight: 500, fontSize: 12 }}>Feature</th>
-                    {PLANS.map(p => <th key={p.id} style={{ padding: "10px 16px", textAlign: "center", color: p.color, fontWeight: 700, fontSize: 12 }}>{p.name}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    ["API calls / month", "5,000", "1,00,000", "Unlimited"],
-                    ["Monitored hubs", "3", "25", "Unlimited"],
-                    ["SMS alerts", "30", "500", "Unlimited"],
-                    ["Kalman predictions", "✓", "✓", "✓"],
-                    ["IRP scoring", "✓", "✓", "✓"],
-                    ["OpenRouter AI analysis", "—", "✓", "✓"],
-                    ["Real-time dashboard", "—", "✓", "✓"],
-                    ["Dedicated instance", "—", "—", "✓"],
-                    ["99.9% SLA", "—", "—", "✓"],
-                  ].map((row, i) => (
-                    <tr key={i} style={{ borderBottom: `1px solid ${C.border}15` }}>
-                      <td style={{ padding: "11px 16px", color: C.muted, fontSize: 13 }}>{row[0]}</td>
-                      {row.slice(1).map((cell, j) => (
-                        <td key={j} style={{ padding: "11px 16px", textAlign: "center", color: cell === "—" ? C.dim : cell === "✓" ? C.emerald : C.text, fontWeight: cell === "✓" || cell === "—" ? 600 : 400, fontFamily: "JetBrains Mono, monospace", fontSize: 13 }}>{cell}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
             <div style={{ background: C.surface, borderRadius: 12, padding: "18px 24px", border: `1px solid ${C.border}`, display: "flex", gap: 20, alignItems: "center" }}>
               <div style={{ fontSize: 24 }}>🔒</div>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4 }}>Secure payments via Razorpay</div>
-                <div style={{ color: C.muted, fontSize: 13 }}>PCI-DSS compliant. API key generated instantly on payment and stored in Supabase Vault. Enterprise clients are routed to WhatsApp for custom pricing.</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4 }}>Secure payments via Cashfree</div>
+                <div style={{ color: C.muted, fontSize: 13 }}>
+                  PCI-DSS compliant. UPI, cards, net banking, wallets. API key generated instantly on payment.
+                  Enterprise clients are routed to WhatsApp for custom pricing.
+                </div>
               </div>
             </div>
           </div>
         )}
 
+        {/* API KEYS */}
         {tab === "keys" && (
           <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
             <div>
@@ -811,20 +944,22 @@ export default function App() {
             {paymentStatus && (
               <div style={{ background: C.emerald + "15", border: `1px solid ${C.emerald}40`, borderRadius: 12, padding: "16px 20px" }}>
                 <div style={{ color: C.emerald, fontWeight: 700, marginBottom: 4 }}>Payment confirmed</div>
-                <div style={{ color: C.muted, fontSize: 13 }}>{paymentStatus.plan} plan · Payment ID: {paymentStatus.paymentId}</div>
+                <div style={{ color: C.muted, fontSize: 13 }}>{paymentStatus.plan} plan activated</div>
               </div>
             )}
             <APIKeyCard apiKey={purchasedKey || apiKey} />
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px" }}>
-              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>Quick Start</div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>Quick Start Endpoints</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
-                  { method: "GET",  path: "/health",             desc: "Kernel health check" },
-                  { method: "GET",  path: "/api/hubs",           desc: "All hub IRP scores" },
-                  { method: "GET",  path: "/api/kernel/status",  desc: "Full kernel state" },
-                  { method: "POST", path: "/api/kernel/reset",   desc: "Upload CSV + run analysis" },
-                  { method: "POST", path: "/api/kernel/predict", desc: "Kalman prediction for a hub" },
-                  { method: "POST", path: "/api/kernel/analyze", desc: "AI plain-English explanation" },
+                  { method: "GET",  path: "/health",              desc: "Kernel health check" },
+                  { method: "GET",  path: "/api/hubs",            desc: "All hub IRP scores" },
+                  { method: "GET",  path: "/api/kernel/status",   desc: "Full kernel state" },
+                  { method: "POST", path: "/api/kernel/reset",    desc: "Upload CSV + analyze" },
+                  { method: "POST", path: "/api/kernel/upload",   desc: "Upload CSV (alias)" },
+                  { method: "POST", path: "/api/kernel/predict",  desc: "Kalman prediction" },
+                  { method: "POST", path: "/api/kernel/analyze",  desc: "AI plain-English explanation" },
+                  { method: "POST", path: "/api/alerts/test",     desc: "Test Twilio SMS" },
                 ].map((e, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: C.surface, borderRadius: 8 }}>
                     <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 10, fontWeight: 700, color: e.method === "GET" ? C.teal : C.amber, background: (e.method === "GET" ? C.teal : C.amber) + "20", border: `1px solid ${(e.method === "GET" ? C.teal : C.amber)}40`, borderRadius: 4, padding: "2px 6px", flexShrink: 0 }}>{e.method}</span>
@@ -837,32 +972,46 @@ export default function App() {
           </div>
         )}
 
+        {/* DOCS */}
         {tab === "docs" && (
           <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
             <div>
               <h2 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>Documentation</h2>
-              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>Integration guide for the SITI GSC Kernel API.</p>
+              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>Integration guide for the SITI GSC Kernel API v3.0.</p>
             </div>
             {[
               { title: "Authentication", content: `All requests require an X-API-Key header:\n\nfetch("${API_BASE}/api/hubs", {\n  headers: { "X-API-Key": "your-key-here" }\n})` },
-              { title: "POST /api/kernel/reset — Upload & Analyze", content: `const form = new FormData();\nform.append("file", csvFile);\n\nfetch("${API_BASE}/api/kernel/reset", {\n  method: "POST",\n  headers: { "X-API-Key": "your-key", "X-Tenant-ID": "your-org" },\n  body: form\n});` },
-              { title: "POST /api/kernel/predict — Kalman Prediction", content: `fetch("${API_BASE}/api/kernel/predict", {\n  method: "POST",\n  headers: { "X-API-Key": "your-key", "Content-Type": "application/json" },\n  body: JSON.stringify({\n    hub_id: "MUM-CENTRAL-04",\n    observations: [0.3, 0.45, 0.62, 0.78]\n  })\n});\n\n// Returns: { smoothed: [...], predicted: [...], current_delay_prob: 0.81 }` },
+              { title: "POST /api/kernel/reset — Upload & Analyze", content: `const form = new FormData();\nform.append("file", csvFile);  // your logistics CSV\n\nfetch("${API_BASE}/api/kernel/reset", {\n  method: "POST",\n  headers: {\n    "X-API-Key": "your-key",\n    "X-Tenant-ID": "your-org"\n  },\n  body: form\n});\n\n// Also works at /api/kernel/upload (alias)` },
+              { title: "POST /api/kernel/predict — Kalman Prediction", content: `fetch("${API_BASE}/api/kernel/predict", {\n  method: "POST",\n  headers: {\n    "X-API-Key": "your-key",\n    "Content-Type": "application/json"\n  },\n  body: JSON.stringify({\n    hub_id: "MUM-CENTRAL-04",\n    observations: [0.3, 0.45, 0.62, 0.78]\n  })\n});\n\n// Returns: { smoothed: [...], predicted: [...], current_delay_prob: 0.81 }` },
               { title: "Hub Response Schema", content: `{\n  "hub_id": "MUM-CENTRAL-04",\n  "rho": 1.12,          // > 1.0 = overloaded\n  "irp_score": 8.7,    // 0–10, higher = worse\n  "risk": "critical"   // "safe" | "warning" | "critical"\n}` },
+              { title: "Twilio SMS Alerts", content: `// Set these in Render environment variables:\n// TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n// TWILIO_AUTH_TOKEN=your_auth_token\n// TWILIO_FROM_NUMBER=+1xxxxxxxxxx  (your Twilio number)\n// TWILIO_ALERT_NUMBER=+91xxxxxxxxxx (number to alert)\n\n// Test your alerts:\nfetch("${API_BASE}/api/alerts/test", {\n  method: "POST",\n  headers: { "X-API-Key": "your-key", "Content-Type": "application/json" },\n  body: JSON.stringify({ channel: "sms" })\n})` },
             ].map((section, i) => (
               <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
                 <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 14, fontWeight: 700 }}>{section.title}</div>
                 <pre style={{ margin: 0, padding: "18px 20px", fontFamily: "JetBrains Mono, monospace", fontSize: 12, color: C.accentLt, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.8 }}>{section.content}</pre>
               </div>
             ))}
-            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 20px" }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>Support</div>
-              <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.8 }}>
-                For integration support or enterprise enquiries:<br />
-                <span style={{ color: C.accentLt }}>support@siti.ai</span> · Response within 24h on Growth and Enterprise plans.
-              </div>
-            </div>
           </div>
         )}
+
+        {/* CONTACT */}
+        {tab === "contact" && <ContactSection />}
+      </div>
+
+      {/* Footer */}
+      <div style={{ background: C.surface, borderTop: `1px solid ${C.border}`, marginTop: 60, padding: "32px 24px" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>SITI Intelligence</div>
+            <div style={{ color: C.muted, fontSize: 12 }}>Logic for the Paradox · Powered by MIMI Kernel v3.0</div>
+          </div>
+          <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
+            <a href={`https://wa.me/${WA_NUMBER}?text=${WA_SUPPORT_MSG}`} target="_blank" rel="noreferrer"
+              style={{ color: "#25D366", fontSize: 13, textDecoration: "none", fontWeight: 600 }}>💬 WhatsApp Support</a>
+            <a href="mailto:support@siti.ai" style={{ color: C.muted, fontSize: 13, textDecoration: "none" }}>support@siti.ai</a>
+            <span style={{ color: C.muted, fontSize: 12 }}>© 2026 SITI Intelligence</span>
+          </div>
+        </div>
       </div>
     </div>
   );
