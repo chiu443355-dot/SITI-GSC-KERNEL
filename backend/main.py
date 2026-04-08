@@ -1,17 +1,3 @@
-"""
-SITI Intelligence — Production Backend v4.0
-Flask + Supabase + Twilio + Cashfree
-ALL BUGS FIXED:
-  - Correct gunicorn entry point (this file IS the app)
-  - Kaggle/Delhivery CSV auto-mapping (hub_id, arrival_rate, service_rate)
-  - Cashfree /api/payments/create-order endpoint
-  - Proper Kalman filter prediction
-  - IRP calculation fixed for real logistics data
-  - API key middleware aligned with frontend
-  - CORS properly configured
-  - Cashfree webhook signature verification fixed
-"""
-
 import os
 import io
 import re
