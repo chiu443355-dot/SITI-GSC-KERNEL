@@ -33,7 +33,7 @@ These bugs were breaking the entire production deployment:
 | Variable | Required | Description |
 |---|---|---|
 | `CORS_ORIGINS` | ✅ | Your Vercel URL: `https://siti-gsc-kernel.vercel.app` |
-| `API_KEYS` | ✅ | `siti-admin-key-001:ADMIN,siti-ops-key:OPERATOR` |
+| `API_KEYS` | ✅ | XXX |
 | `FRONTEND_URL` | ✅ | `https://siti-gsc-kernel.vercel.app` |
 | `BACKEND_URL` | ✅ | `https://siti-gsc-kernel-1.onrender.com` |
 | `CASHFREE_APP_ID` | Payments | From Cashfree dashboard |
@@ -47,7 +47,7 @@ These bugs were breaking the entire production deployment:
 | `TWILIO_FROM_NUMBER` | Alerts | Your Twilio number |
 | `TWILIO_ALERT_NUMBER` | Alerts | Number to receive alerts |
 | `OPENROUTER_API_KEY` | AI | OpenRouter key for AI analysis |
-| `WHATSAPP_NUMBER` | Payments | `918956493671` |
+| `WHATSAPP_NUMBER` | Payments | `91XXXXX` |
 
 ### Without Cashfree (WhatsApp Fallback)
 If `CASHFREE_APP_ID` is not set, all payment buttons redirect to WhatsApp with pre-filled message. Set `WHATSAPP_NUMBER` to your business number.
