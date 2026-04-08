@@ -715,7 +715,7 @@ def analyze_logistics():
         return jsonify({
             "explanation": (
                 f"Hub {hub_id} is showing a load factor ρ={rho:.3f}. "
-                f"{'This hub is over capacity — arrivals exceed the processing rate. '
+               f"This hub is over capacity — arrivals exceed the processing rate." 
                    'Immediate rerouting is recommended.' if rho > 1 else
                    'This hub is within normal operating range.'} "
                 f"The Inverse Reliability Paradox indicates that high-value shipments "
