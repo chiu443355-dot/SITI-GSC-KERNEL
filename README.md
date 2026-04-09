@@ -1,128 +1,117 @@
-# SITI Intelligence — MIMI Kernel v4.0
+# SITI Intelligence Kernel v2.0 — Unicorn-Ready Refactor
 
-**B2B logistics SaaS. Detects supply chain leakage using Kalman Filter + Inverse Reliability Paradox mathematics.**
+## What Changed (and Why)
 
----
-
-## 🚨 CRITICAL DEPLOYMENT FIXES (v4.0)
-
-These bugs were breaking the entire production deployment:
-
-| Bug | Symptom | Fix |
-|-----|---------|-----|
-| Wrong gunicorn entry point | Backend dead on Render | `gunicorn backend.main:app` |
-| Missing Cashfree create-order | All payments silently WhatsApp-only | Added `/api/payments/create-order` |
-| Kaggle CSV column mismatch | Every CSV upload failed | Auto-synthesis of arrival_rate/service_rate |
-| Kalman prediction wrong | T+3 forecast was meaningless | Proper random-walk Kalman model |
-| IRP score = 0 at small scale | IRP always showed 0 for small datasets | Fixed scale-aware formula |
-
----
-
-## Backend (Render)
-
-1. Link this GitHub repo to your Render Web Service.
-2. Set **Runtime**: Python 3.11
-3. **Build Command**: `pip install -r backend/requirements.txt`
-4. **⚠️ Start Command** (CRITICAL FIX): `gunicorn backend.main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120`
-5. Set Environment Variables in Render Dashboard (see below).
-
-> **Why `backend.main:app`?** The Flask app is in `backend/main.py`. The old README said `backend.app:app` which pointed to a non-existent file — this caused a crash on every cold start.
-
-### Required Environment Variables
-
-| Variable | Required | Description |
+| Problem | v1 Behaviour | v2 Fix |
 |---|---|---|
-| `CORS_ORIGINS` | ✅ | Your Vercel URL: `https://siti-gsc-kernel.vercel.app` |
-| `API_KEYS` | ✅ | XXX |
-| `FRONTEND_URL` | ✅ | `https://siti-gsc-kernel.vercel.app` |
-| `BACKEND_URL` | ✅ | `https://siti-gsc-kernel-1.onrender.com` |
-| `CASHFREE_APP_ID` | Payments | From Cashfree dashboard |
-| `CASHFREE_SECRET_KEY` | Payments | From Cashfree dashboard |
-| `CASHFREE_ENV` | Payments | `production` or `sandbox` |
-| `CASHFREE_WEBHOOK_SECRET` | Payments | From Cashfree webhook settings |
-| `SUPABASE_URL` | API Keys | Supabase project URL |
-| `SUPABASE_SERVICE_KEY` | API Keys | Supabase service key |
-| `TWILIO_ACCOUNT_SID` | Alerts | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | Alerts | Twilio auth token |
-| `TWILIO_FROM_NUMBER` | Alerts | Your Twilio number |
-| `TWILIO_ALERT_NUMBER` | Alerts | Number to receive alerts |
-| `OPENROUTER_API_KEY` | AI | OpenRouter key for AI analysis |
-| `WHATSAPP_NUMBER` | Payments | `91XXXXX` |
-
-### Without Cashfree (WhatsApp Fallback)
-If `CASHFREE_APP_ID` is not set, all payment buttons redirect to WhatsApp with pre-filled message. Set `WHATSAPP_NUMBER` to your business number.
+| State lost on sleep | `_kernels` dict in RAM | All state in Supabase (PostgreSQL) |
+| Auth security hole | `siti-admin-key-001` env fallback | DB-only lookup, no hardcoded fallback |
+| Render crash loop | Eager Supabase import at startup | `get_supabase()` lazy init |
+| Manual payment flow | Fell back to WhatsApp | Cashfree webhook auto-provisions API key |
+| Data leakage risk | No tenant filter audit | Every query uses `_tenant_guard()` |
 
 ---
 
-## Frontend (Vercel)
+## Quickstart (5 Steps)
 
+### Step 1 — Run the Schema
+Open Supabase Dashboard → SQL Editor → paste `schema.sql` → Run.
+
+### Step 2 — Set Render Environment Variables
+In your Render service → Environment:
+
+```
+SUPABASE_URL        = https://xxxx.supabase.co
+SUPABASE_KEY        = eyJhbGci...  (service role key, NOT anon key)
+SITI_ADMIN_SECRET   = generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+CASHFREE_CLIENT_ID  = from Cashfree dashboard
+CASHFREE_CLIENT_SECRET = from Cashfree dashboard
+CASHFREE_WEBHOOK_SECRET = from Cashfree dashboard → Webhooks
+CASHFREE_WEBHOOK_URL = https://your-render-url.onrender.com/payments/webhook
+CASHFREE_ENV        = TEST  (change to PROD when live)
+TWILIO_ACCOUNT_SID  = from Twilio console
+TWILIO_AUTH_TOKEN   = from Twilio console
+TWILIO_FROM_NUMBER  = +1415XXXXXXX
+```
+
+### Step 3 — UptimeRobot (Prevent Cold Sleep)
+Add a new monitor:
+- URL: `https://your-render-url.onrender.com/ping`
+- Interval: 10 minutes
+- This keeps Render's free tier awake during business hours.
+
+### Step 4 — Create First Tenant (Manual, One-Time)
+```sql
+-- In Supabase SQL Editor:
+INSERT INTO api_keys (tenant_id, key_value, is_active, customer_email)
+VALUES (
+    'tenant_spoton_001',
+    'siti_' || encode(gen_random_bytes(24), 'base64'),
+    true,
+    'ops@spoton.in'
+);
+```
+
+### Step 5 — Test the API
 ```bash
-# Install
-cd frontend && npm install
+# Health check (no auth)
+curl https://your-render-url.onrender.com/health
 
-# Dev
-npm start
+# Ingest a shipment (with auth)
+curl -X POST https://your-render-url.onrender.com/shipments/ingest \
+  -H "X-API-Key: siti_YOUR_KEY_HERE" \
+  -H "X-Tenant-ID: tenant_spoton_001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "shipment_id": "AWB123456",
+    "hub_id": "hub_mumbai_01",
+    "carrier": "Spoton",
+    "origin": "Mumbai",
+    "destination": "Nagpur",
+    "promised_transit_hours": 24,
+    "actual_transit_hours": 27.5
+  }'
 
-# Build
-npm run build
-```
-
-### Vercel Environment Variables
-
-```
-REACT_APP_BACKEND_URL=https://siti-gsc-kernel-1.onrender.com
-REACT_APP_API_KEY=siti-admin-key-001
+# Hub analytics
+curl https://your-render-url.onrender.com/hubs/hub_mumbai_01/analytics \
+  -H "X-API-Key: siti_YOUR_KEY_HERE" \
+  -H "X-Tenant-ID: tenant_spoton_001"
 ```
 
 ---
 
-## Architecture
+## Architecture Decisions
 
-- **Backend**: Flask + Supabase (optional) + Kalman Filter (1D) + M/M/1 queueing
-- **Frontend**: React 19, dark purple/teal/coral aesthetic
-- **Auth**: API key (RBAC) with Supabase persistence + env-based fallback
-- **Payments**: Cashfree webhook → auto-provision API key + SendGrid/WhatsApp delivery
+### Why stateless?
+Render Free Tier spins down after 15 mins. Any Python dict dies. Supabase
+PostgreSQL is the only persistent layer. Every request is `fetch → compute → save`.
 
-## Key Endpoints
+### Why `get_supabase()` lazy init?
+Render injects env-vars AFTER the process starts. Eager module-level init
+(`supabase = create_client(os.environ["SUPABASE_URL"], ...)`) crashes before
+the env is set. Lazy init defers the call to first request time.
 
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/health` | None | Health check for Render |
-| `GET` | `/ping` | None | UptimeRobot keep-alive |
-| `GET` | `/api/kernel/status` | Key | Full MIMI kernel state |
-| `POST` | `/api/kernel/reset` | Key | Upload CSV (auto-maps columns) |
-| `POST` | `/api/kernel/upload` | Key | Alias for reset |
-| `POST` | `/api/kernel/predict` | Key | Kalman T+3 prediction |
-| `POST` | `/api/kernel/analyze` | None | AI explanation |
-| `POST` | `/api/payments/create-order` | Key | **NEW** Cashfree order |
-| `POST` | `/api/payments/cashfree-webhook` | Sig | Payment webhook |
-| `POST` | `/api/alerts/test` | Key | Test Twilio SMS |
-| `GET` | `/api/admin/keys` | Key | List API keys |
-| `POST` | `/api/admin/create-key` | Key | Create API key |
+### Why no `lru_cache` for API key lookup?
+`lru_cache` has no TTL. We use a manual dict with `time.monotonic()` comparison
+for a 30-second sliding window. This absorbs burst traffic (100 req/sec from
+the same tenant = 1 DB hit per 30s) without stale keys living forever.
 
-## CSV Compatibility
+### Core IP preserved
+- `KalmanFilter1D` — Kalman 1960, state stored as JSONB in `shipments.kalman_state`
+- `mm1_queue_metrics` — M/M/1 queueing theory, runs per-request
+- `phi_sigmoidal_decay` — Smiti's Φ function, parameterised
+- `detect_irp` — Inverse Reliability Paradox flag
 
-SITI v4.0 auto-maps columns from any logistics CSV:
+---
 
-| SITI Field | Kaggle | Delhivery | Custom |
-|---|---|---|---|
-| `hub_id` | `Warehouse_block` | `origin_hub` | `block`, `depot`, `zone` |
-| `arrival_rate` | *auto-synthesized from row distribution* | `arrival_count` | `lambda` |
-| `service_rate` | *auto-synthesized from hub count* | `throughput` | `mu`, `capacity` |
-| `shipment_id` | `ID` | `waybill` | `order_id`, `awb` |
+## Payment Flow (Cashfree)
 
-If your CSV uses `Warehouse_block` (Kaggle e-commerce dataset), SITI automatically:
-1. Maps `Warehouse_block → hub_id`
-2. Computes `arrival_rate` as the proportion of shipments per hub × 100
-3. Sets `service_rate` as equal capacity across all hubs
+```
+Client → POST /payments/create-order → Cashfree API → payment_session_id
+                                                            ↓
+                                               Customer pays on Cashfree UI
+                                                            ↓
+Cashfree → POST /payments/webhook (HMAC verified) → INSERT api_keys → SMS to customer
+```
 
-## Keep-Alive (Render Free Tier)
-
-Set up UptimeRobot to ping `https://siti-gsc-kernel-1.onrender.com/ping` every 10 minutes to prevent cold starts.
-
-## Cashfree Webhook Setup
-
-1. Cashfree Dashboard → Developers → Webhooks → Add Webhook
-2. URL: `https://siti-gsc-kernel-1.onrender.com/api/payments/cashfree-webhook`
-3. Events: `PAYMENT_SUCCESS`
-4. Copy the Webhook Secret → Render env var `CASHFREE_WEBHOOK_SECRET`
+Zero manual intervention. Zero WhatsApp messages needed.
