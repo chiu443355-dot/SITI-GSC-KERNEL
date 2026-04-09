@@ -1,1026 +1,790 @@
-import os
-import io
-import re
-import math
-import uuid
-import logging
+from __future__ import annotations
+
 import hashlib
 import hmac
-import json
+import logging
+import os
 import time
-from collections import deque
-from datetime import datetime
-from functools import wraps
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from functools import lru_cache
+from typing import Any
 
 import httpx
-import numpy as np
-import pandas as pd
-from flask import Flask, request, jsonify, Response
-from flask_cors import CORS
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
-log = logging.getLogger("siti")
+logger = logging.getLogger("siti.kernel")
 
-app = Flask(__name__)
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
-# BUG-011 FIX: Proper CORS — allow configured origins + all Vercel previews
-_cors_origins_raw = os.getenv("CORS_ORIGINS", "*")
-CORS(app, resources={
-    r"/api/*": {
-        "origins": _cors_origins_raw.split(","),
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": [
-            "Content-Type", "X-API-Key", "X-Tenant-ID",
-            "Authorization", "X-Requested-With"
-        ],
-        "expose_headers": ["X-Request-ID"],
-        "supports_credentials": False,
-    }
-})
+# ---------------------------------------------------------------------------
+# Lazy Supabase client  (fixes Render cold-start crash)
+# ---------------------------------------------------------------------------
+_supabase_client = None
 
-# ── Lazy Supabase ──────────────────────────────────────────────────────────────
-_supabase = None
 
 def get_supabase():
-    global _supabase
-    if _supabase is not None:
-        return _supabase
-    url = os.getenv("SUPABASE_URL", "")
-    key = os.getenv("SUPABASE_SERVICE_KEY", "")
-    if not url or not key:
+    """Lazy-initialise the Supabase client.
+
+    Called only when a request actually needs DB access, not at module import.
+    This prevents the 'Exited with status 1' crash on Render free tier when
+    env-vars are not yet injected at cold-start.
+    """
+    global _supabase_client
+    if _supabase_client is None:
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_KEY")
+        if not url or not key:
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_KEY must be set as environment variables."
+            )
+        from supabase import create_client  # deferred import
+        _supabase_client = create_client(url, key)
+        logger.info("Supabase client initialised.")
+    return _supabase_client
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+CASHFREE_CLIENT_ID = os.environ.get("CASHFREE_CLIENT_ID", "")
+CASHFREE_CLIENT_SECRET = os.environ.get("CASHFREE_CLIENT_SECRET", "")
+CASHFREE_ENV = os.environ.get("CASHFREE_ENV", "TEST")  # TEST | PROD
+CASHFREE_BASE = (
+    "https://api.cashfree.com/pg"
+    if CASHFREE_ENV == "PROD"
+    else "https://sandbox.cashfree.com/pg"
+)
+
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER", "")
+
+
+# ---------------------------------------------------------------------------
+# App lifespan
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("SITI Kernel starting up...")
+    yield
+    logger.info("SITI Kernel shutting down.")
+
+
+app = FastAPI(
+    title="SITI Intelligence Kernel",
+    version="2.0.0",
+    description="Stateless logistics intelligence API for Indian regional 3PLs.",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ===========================================================================
+# SECTION 1 — AUTHENTICATION (DB-first, 30-second cache)
+# ===========================================================================
+
+# We use a module-level dict as a simple TTL cache instead of lru_cache
+# because lru_cache doesn't support TTL natively and we need invalidation.
+_api_key_cache: dict[str, tuple[dict, float]] = {}
+_API_KEY_TTL_SECONDS = 30
+
+
+def _cache_get(key: str) -> dict | None:
+    entry = _api_key_cache.get(key)
+    if entry is None:
         return None
-    try:
-        from supabase import create_client
-        _supabase = create_client(url, key)
-        log.info("Supabase connected")
-    except Exception as e:
-        log.warning("Supabase init skipped: %s", e)
-    return _supabase
-
-# ── Lazy Twilio ────────────────────────────────────────────────────────────────
-_twilio = None
-
-def get_twilio():
-    global _twilio
-    if _twilio is not None:
-        return _twilio
-    sid   = os.getenv("TWILIO_ACCOUNT_SID", "")
-    token = os.getenv("TWILIO_AUTH_TOKEN", "")
-    if not sid or not token:
+    payload, ts = entry
+    if time.monotonic() - ts > _API_KEY_TTL_SECONDS:
+        del _api_key_cache[key]
         return None
+    return payload
+
+
+def _cache_set(key: str, payload: dict) -> None:
+    _api_key_cache[key] = (payload, time.monotonic())
+
+
+def verify_api_key(
+    x_api_key: str = Header(..., alias="X-API-Key"),
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+) -> dict:
+    """Validate API key exclusively against the Supabase `api_keys` table.
+
+    Security design:
+    - NO fallback to env-var keys (the old 'siti-admin-key-001' backdoor is gone).
+    - 30-second in-process TTL cache to absorb burst traffic without hammering DB.
+    - Tenant ID is cross-checked so one tenant cannot use another's key.
+    """
+    cache_key = f"{x_tenant_id}:{x_api_key}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
     try:
-        from twilio.rest import Client
-        _twilio = Client(sid, token)
-        log.info("Twilio connected")
-    except Exception as e:
-        log.warning("Twilio init skipped: %s", e)
-    return _twilio
-
-
-def send_alert(message: str, channel: str = "sms") -> dict:
-    """Send alert via SMS or WhatsApp."""
-    client = get_twilio()
-    if not client:
-        log.warning("Twilio not configured — alert skipped")
-        return {"sent": False, "reason": "Twilio not configured"}
-
-    from_num = os.getenv("TWILIO_FROM_NUMBER", "")
-    to_num   = os.getenv("TWILIO_ALERT_NUMBER", "")
-
-    if not from_num or not to_num:
-        return {"sent": False, "reason": "Phone numbers not configured"}
-
-    try:
-        if channel == "whatsapp":
-            from_str = f"whatsapp:{from_num}" if not from_num.startswith("whatsapp:") else from_num
-            to_str   = f"whatsapp:{to_num}"   if not to_num.startswith("whatsapp:")   else to_num
-        else:
-            from_str, to_str = from_num, to_num
-
-        msg = client.messages.create(body=message, from_=from_str, to=to_str)
-        return {"sent": True, "sid": msg.sid, "channel": channel}
-    except Exception as e:
-        log.error("Twilio send failed: %s", e)
-        return {"sent": False, "reason": str(e)}
-
-
-# ── Auth middleware ────────────────────────────────────────────────────────────
-# BUG-001 FIX: Consistent key parsing — support "key:ROLE" and plain "key" formats
-_raw_keys = os.getenv("API_KEYS", "siti-admin-key-001:ADMIN,siti-demo-key:READONLY")
-_FALLBACK_KEYS = set()
-for entry in _raw_keys.split(","):
-    entry = entry.strip()
-    if entry:
-        _FALLBACK_KEYS.add(entry.split(":")[0])
-
-log.info("Fallback API keys loaded: %d keys", len(_FALLBACK_KEYS))
-
-
-def require_api_key(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        # BUG-001 FIX: Check all common header variations the frontend might send
-        key = (
-            request.headers.get("X-API-Key")
-            or request.headers.get("x-api-key")
-            or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-            or request.args.get("api_key")
+        sb = get_supabase()
+        result = (
+            sb.table("api_keys")
+            .select("*")
+            .eq("key_value", x_api_key)
+            .eq("tenant_id", x_tenant_id)
+            .eq("is_active", True)
+            .execute()
         )
-        if not key:
-            return jsonify({
-                "error": "Missing API key.",
-                "hint": "Send header: X-API-Key: your-key-here"
-            }), 401
+    except Exception as exc:
+        logger.error("DB error during API key lookup: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service temporarily unavailable.",
+        )
 
-        # Try Supabase first
-        db = get_supabase()
-        if db:
-            try:
-                res = db.table("api_keys").select("key,active").eq("key", key).execute()
-                if res.data:
-                    if res.data[0].get("active"):
-                        return fn(*args, **kwargs)
-                    return jsonify({"error": "API key inactive."}), 403
-            except Exception as e:
-                log.warning("Supabase auth check failed, using fallback: %s", e)
+    rows = result.data or []
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or inactive API key for this tenant.",
+        )
 
-        # Fallback: env-based keys
-        if key in _FALLBACK_KEYS:
-            return fn(*args, **kwargs)
-
-        return jsonify({
-            "error": "Invalid API key.",
-            "hint": "Use siti-admin-key-001 for demo access."
-        }), 403
-    return wrapper
+    tenant_ctx = rows[0]
+    _cache_set(cache_key, tenant_ctx)
+    return tenant_ctx
 
 
-# ── MIMI Kernel Math ────────────────────────────────────────────────────────────
-def compute_irp(lam: float, mu: float, scale: int) -> tuple[float, float]:
-    """
-    Compute load factor ρ and IRP score.
-    BUG-015 FIX: IRP now uses a meaningful formula based on queue theory.
-    IRP = Φ(ρ) × failure_severity_weight
-    """
-    mu = max(mu, 1e-9)
-    rho = min(lam / mu, 2.0)  # cap to prevent infinity
-    # Sigmoidal instability function
-    phi = 1 / (1 + math.exp(-20 * (rho - 0.85)))
-    # IRP: weighted by log scale for statistical significance
-    # At small scale (1-10 rows), use rho directly scaled; at large scale use full log
-    if scale >= 10:
-        irp = phi * math.log1p(scale) / math.log1p(1000) * 10.0
-    else:
-        irp = phi * rho * 3.0  # BUG-015 FIX: meaningful small-scale score
-    return round(rho, 6), round(min(irp, 10.0), 6)
+# ---------------------------------------------------------------------------
+# Convenience type alias used in route signatures
+# ---------------------------------------------------------------------------
+TenantCtx = dict  # returned by verify_api_key
 
 
-def risk_level(rho: float) -> str:
-    if rho >= 0.85: return "critical"
-    if rho >= 0.70: return "warning"
-    return "safe"
-
+# ===========================================================================
+# SECTION 2 — CORE MATH (Kalman Filter + M/M/1 Queue + Φ Decay + IRP)
+# ===========================================================================
 
 class KalmanFilter1D:
-    """
-    Proper 1D Kalman filter for hub delay probability.
-    BUG-014 FIX: predict_n() now implements correct Kalman prediction
-    (state evolves as random walk — prediction is current estimate,
-    uncertainty grows by Q each step).
-    """
-    def __init__(self, process_var=0.005, obs_var=0.1):
-        self.x = 0.5
-        self.P = 1.0
-        self.Q = process_var  # process noise
-        self.R = obs_var      # observation noise
+    """Univariate Kalman filter for shipment ETA smoothing.
 
-    def update(self, z: float) -> float:
-        """Update state with new observation."""
+    State: estimated transit time (hours)
+    Observation: reported transit time from carrier scan
+    """
+
+    def __init__(
+        self,
+        process_variance: float = 1.0,
+        measurement_variance: float = 4.0,
+        initial_estimate: float = 0.0,
+        initial_error: float = 1.0,
+    ):
+        self.q = process_variance       # process noise covariance
+        self.r = measurement_variance   # measurement noise covariance
+        self.x = initial_estimate       # state estimate
+        self.p = initial_error          # error covariance
+
+    def update(self, measurement: float) -> float:
+        """Run one predict-update cycle and return the smoothed estimate."""
         # Predict
-        x_pred = self.x
-        P_pred = self.P + self.Q
-        # Update
-        K      = P_pred / (P_pred + self.R)
-        self.x = x_pred + K * (z - x_pred)
-        self.P = (1 - K) * P_pred
-        return round(self.x, 6)
+        self.p = self.p + self.q
 
-    def predict_n(self, n: int) -> list[float]:
-        """
-        BUG-014 FIX: Correct Kalman prediction.
-        Without new observations, best estimate stays at x_hat
-        but uncertainty grows. We return x_hat with small
-        uncertainty-based drift.
-        """
-        preds = []
-        x, P = self.x, self.P
-        for _ in range(n):
-            # State prediction: x stays same (random walk model)
-            P = P + self.Q
-            # Under uncertainty, clip prediction to [0, 1]
-            predicted = round(min(max(x, 0.0), 1.0), 6)
-            preds.append(predicted)
-        return preds
+        # Update (Kalman gain)
+        k = self.p / (self.p + self.r)
+        self.x = self.x + k * (measurement - self.x)
+        self.p = (1 - k) * self.p
+
+        return self.x
+
+    def to_dict(self) -> dict:
+        return {"x": self.x, "p": self.p, "q": self.q, "r": self.r}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "KalmanFilter1D":
+        kf = cls(process_variance=d["q"], measurement_variance=d["r"])
+        kf.x = d["x"]
+        kf.p = d["p"]
+        return kf
 
 
-# ── Per-tenant kernel ──────────────────────────────────────────────────────────
-class TenantKernel:
-    def __init__(self, tenant_id: str):
-        self.tenant_id     = tenant_id
-        self.shipments:     list[dict] = []
-        self.hub_stats:     dict[str, dict] = {}
-        self.kalman_states: dict[str, KalmanFilter1D] = {}
-        self.alert_log:     deque = deque(maxlen=500)
-        self.created_at    = datetime.utcnow().isoformat()
-        self.last_reset    = None
-
-    def reset(self, df: pd.DataFrame) -> dict:
-        """Wipe state and re-ingest CSV with flexible column mapping."""
-        self.shipments.clear()
-        self.hub_stats.clear()
-        self.kalman_states.clear()
-        self.alert_log.clear()
-        self.last_reset = datetime.utcnow().isoformat()
-
-        # BUG-003 FIX: Extended column normalization for Kaggle + Delhivery datasets
-        df = self._normalize_columns(df)
-
-        required = {"hub_id", "arrival_rate", "service_rate"}
-        missing  = required - set(df.columns)
-        if missing:
-            raise ValueError(
-                f"CSV missing required columns: {missing}. "
-                f"Found: {list(df.columns)[:15]}"
-            )
-
-        if "shipment_id" not in df.columns:
-            df["shipment_id"] = [f"SHP-{i:06d}" for i in range(len(df))]
-
-        for _, row in df.iterrows():
-            rec = row.to_dict()
-            self.shipments.append(rec)
-            self._update_hub(rec)
-
-        log.info("Kernel reset: %s — %d rows, %d hubs",
-                 self.tenant_id, len(self.shipments), len(self.hub_stats))
-        return self._summary()
-
-    @staticmethod
-    def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        BUG-003 FIX: Extended fuzzy column mapping.
-        Handles Kaggle e-commerce logistics CSV, Delhivery, custom 3PL formats.
-
-        Kaggle dataset columns:
-          ID, Warehouse_block, Mode_of_Shipment, Customer_care_calls,
-          Customer_rating, Cost_of_the_Product, Prior_purchases,
-          Product_importance, Gender, Discount_offered, Weight_in_gms,
-          Reached.on.Time_Y.N
-
-        We synthesize hub_id from Warehouse_block, arrival_rate from
-        row count (each row = 1 arrival), service_rate from a block-based
-        capacity estimate.
-        """
-        MAP = {
-            "hub_id": [
-                "hub", "hub_code", "depot", "facility", "warehouse_block",
-                "block", "wh_block", "location", "asset_id", "zone",
-                "warehouse", "origin_hub", "dest_hub", "sorting_center",
-            ],
-            "arrival_rate": [
-                "lambda", "arrival_count", "inbound_rate", "arrivals",
-                "shipments_per_hour", "count", "daily_count", "volume",
-                "throughput_in", "order_count", "package_count",
-            ],
-            "service_rate": [
-                "mu", "processing_rate", "throughput", "capacity",
-                "service_capacity", "capacity_per_hour", "processing_capacity",
-                "output_rate", "dispatch_rate", "throughput_out",
-            ],
-            "shipment_id": [
-                "id", "shipment_id", "order_id", "tracking", "tracking_no",
-                "shipment_no", "awb", "waybill", "consignment_no", "pkg_id",
-            ],
-        }
-        rename = {}
-        cols_lower = {c.lower().strip().replace(".", "_"): c for c in df.columns}
-
-        for target, candidates in MAP.items():
-            if target in df.columns:
-                continue
-            for cand in candidates:
-                if cand in cols_lower:
-                    rename[cols_lower[cand]] = target
-                    break
-
-        df = df.rename(columns=rename)
-
-        # ── SYNTHETIC COLUMN GENERATION for Kaggle-style datasets ────────────
-        # If after mapping we still don't have arrival_rate and service_rate,
-        # but we have Warehouse_block (mapped to hub_id), synthesize them.
-        if "hub_id" in df.columns and "arrival_rate" not in df.columns:
-            # Each row = 1 shipment arriving; aggregate count per hub as λ
-            hub_counts = df["hub_id"].value_counts()
-            n_total = len(df)
-            # λ for each row = (its hub's total count) / total rows * 100
-            # This gives arrival rate as % of total load — realistic for M/M/1
-            df["arrival_rate"] = df["hub_id"].map(
-                lambda h: round(hub_counts.get(h, 1) / max(n_total, 1) * 100, 4)
-            )
-            log.info("Synthesized arrival_rate from hub distribution")
-
-        if "hub_id" in df.columns and "service_rate" not in df.columns:
-            # Service rate = fixed capacity baseline per hub
-            # In Kaggle dataset, 5 blocks (A,B,C,D,F) with equal capacity
-            n_hubs = df["hub_id"].nunique()
-            base_mu = 100.0 / max(n_hubs, 1)  # total capacity split across hubs
-            df["service_rate"] = base_mu
-            log.info("Synthesized service_rate=%.2f from %d hubs", base_mu, n_hubs)
-
-        # Handle on-time delivery column for leakage calculation
-        if "on_time" not in df.columns:
-            for col in ["Reached.on.Time_Y.N", "reached_on_time_y_n",
-                        "delivered_on_time", "on_time_delivery", "late"]:
-                if col in df.columns:
-                    df["on_time"] = df[col]
-                    break
-
-        return df
-
-    def _update_hub(self, rec: dict):
-        hub = str(rec.get("hub_id", "UNKNOWN"))
-        lam = float(rec.get("arrival_rate", 0) or 0)
-        mu  = float(rec.get("service_rate",  1) or 1)
-
-        if hub not in self.hub_stats:
-            self.hub_stats[hub] = {
-                "lambda_sum": 0, "mu_sum": 0, "count": 0,
-                "queue_depth": 0, "on_time": 0, "late": 0
-            }
-
-        s = self.hub_stats[hub]
-        s["lambda_sum"]  += lam
-        s["mu_sum"]      += mu
-        s["count"]       += 1
-        s["queue_depth"] += max(0, lam - mu)
-
-        # Track on-time delivery if available
-        on_time_val = rec.get("on_time")
-        if on_time_val is not None:
-            try:
-                v = float(on_time_val)
-                # Kaggle: 1 = reached on time, 0 = late
-                # Some datasets: 1 = late, 0 = on time
-                # We detect by column name context
-                s["on_time"] += int(v == 1)
-                s["late"]    += int(v == 0)
-            except (ValueError, TypeError):
-                pass
-
-    def _summary(self) -> dict:
-        hubs = []
-        for hub_id, s in self.hub_stats.items():
-            n   = max(s["count"], 1)
-            lam = s["lambda_sum"] / n
-            mu  = s["mu_sum"]     / n
-            rho, irp = compute_irp(lam, mu, n)
-
-            # Update Kalman with current rho observation
-            if hub_id not in self.kalman_states:
-                self.kalman_states[hub_id] = KalmanFilter1D()
-            kf = self.kalman_states[hub_id]
-            kf.update(rho)  # feed current rho as observation
-            predictions = kf.predict_n(3)  # T+1, T+2, T+3
-
-            hubs.append({
-                "hub_id":            hub_id,
-                "lambda":            round(lam, 4),
-                "mu":                round(mu,  4),
-                "rho":               rho,
-                "irp_score":         irp,
-                "queue_depth":       int(s["queue_depth"]),
-                "risk":              risk_level(rho),
-                "on_time":           s["on_time"],
-                "late":              s["late"],
-                "shipments":         n,
-                "delay_rate":        round(s["late"] / n, 4) if n > 0 else 0,
-                "kalman_estimate":   round(kf.x, 6),
-                "kalman_t1":         predictions[0] if predictions else None,
-                "kalman_t2":         predictions[1] if len(predictions) > 1 else None,
-                "kalman_t3":         predictions[2] if len(predictions) > 2 else None,
-            })
-
-        # Sort by rho descending — highest risk first
-        hubs.sort(key=lambda h: -h["rho"])
-
-        total_rho = (
-            sum(h["rho"] for h in hubs) / len(hubs) if hubs else 0
-        )
-
+def mm1_queue_metrics(
+    arrival_rate: float,  # λ — shipments per hour
+    service_rate: float,  # μ — shipments processed per hour
+) -> dict[str, float]:
+    """M/M/1 queueing theory metrics for hub throughput analysis."""
+    if service_rate <= 0:
+        raise ValueError("service_rate must be positive.")
+    if arrival_rate >= service_rate:
+        # System is saturated — return sentinel values
         return {
-            "tenant_id":            self.tenant_id,
-            "total_rows":           len(self.shipments),
-            "hub_count":            len(hubs),
-            "hubs":                 hubs,
-            "global_rho":           round(total_rho, 6),
-            "annualized_exposure":  2_810_000,
-            "reset_at":             self.last_reset,
+            "utilisation": 1.0,
+            "avg_queue_length": float("inf"),
+            "avg_wait_hours": float("inf"),
+            "avg_system_time_hours": float("inf"),
+            "is_saturated": True,
         }
 
+    rho = arrival_rate / service_rate  # utilisation
+    lq = (rho ** 2) / (1 - rho)       # avg queue length (Lq)
+    wq = lq / arrival_rate             # avg wait in queue (Wq)  — Little's Law
+    w = wq + (1 / service_rate)        # avg time in system (W)
 
-_kernels: dict[str, TenantKernel] = {}
-
-
-def get_kernel(tenant_id: str = "default") -> TenantKernel:
-    if tenant_id not in _kernels:
-        _kernels[tenant_id] = TenantKernel(tenant_id)
-    return _kernels[tenant_id]
-
-
-# ── CSV parsing ────────────────────────────────────────────────────────────────
-def parse_csv_resilient(raw_bytes: bytes) -> pd.DataFrame:
-    """
-    Multi-encoding fallback CSV parser.
-    UTF-8 → ISO-8859-1 → Windows-1252, strips non-ASCII, skips bad lines.
-    """
-    text = None
-    for encoding in ("utf-8", "iso-8859-1", "windows-1252"):
-        try:
-            decoded = raw_bytes.decode(encoding)
-            if "\uFFFD" not in decoded:
-                text = decoded
-                break
-        except (UnicodeDecodeError, ValueError):
-            continue
-
-    if text is None:
-        text = raw_bytes.decode("utf-8", errors="replace")
-
-    # Strip non-ASCII special characters (smart quotes, em-dash, BOM, etc.)
-    text = re.sub(r"[^\x20-\x7E\t\n\r]", "", text)
-
-    # Strip unit suffixes from numeric-ish values (100kg → 100, $5.99 → 5.99)
-    def sanitize_row(row: str) -> str:
-        return re.sub(
-            r"(\d)\s*(kg|g|lbs|oz|\$|₹|€|£|%|units?|hrs?|hours?)",
-            r"\1", row, flags=re.IGNORECASE
-        )
-
-    lines  = text.split("\n")
-    if not lines:
-        raise ValueError("Empty CSV")
-    header = lines[0]
-    body   = "\n".join(sanitize_row(l) for l in lines[1:])
-    text   = header + "\n" + body
-
-    df = pd.read_csv(
-        io.StringIO(text),
-        on_bad_lines="skip",
-        low_memory=False,
-    )
-
-    # Fill missing numeric values with column means
-    num_cols = df.select_dtypes(include=[np.number]).columns
-    if len(num_cols) > 0:
-        df[num_cols] = df[num_cols].fillna(df[num_cols].mean())
-
-    return df
-
-
-# ── Upload handler ─────────────────────────────────────────────────────────────
-def _handle_upload():
-    """Shared CSV upload + kernel reset handler."""
-    tenant_id = request.headers.get("X-Tenant-ID", "default")
-    kernel    = get_kernel(tenant_id)
-
-    if "file" not in request.files:
-        return jsonify({
-            "error": "No file uploaded.",
-            "hint":  "Send CSV as multipart/form-data in the 'file' field."
-        }), 400
-
-    f = request.files["file"]
-    if not f.filename.lower().endswith(".csv"):
-        return jsonify({"error": "Only .csv files are supported."}), 400
-
-    raw = f.read()
-    if not raw:
-        return jsonify({"error": "Uploaded file is empty."}), 400
-
-    try:
-        df = parse_csv_resilient(raw)
-    except Exception as e:
-        return jsonify({"error": f"CSV parse failed: {e}"}), 422
-
-    if df.empty:
-        return jsonify({"error": "CSV has no data rows after parsing."}), 422
-
-    try:
-        summary = kernel.reset(df)
-    except ValueError as e:
-        return jsonify({
-            "error": str(e),
-            "detail": {
-                "type":               "SCHEMA_MISMATCH",
-                "found_columns":      list(df.columns),
-                "required_unmapped":  ["hub_id", "arrival_rate", "service_rate"],
-                "hint": (
-                    "Common Kaggle columns are auto-mapped. "
-                    "If using a custom CSV, ensure columns map to: "
-                    "hub_id (warehouse/block), arrival_rate (lambda/count), "
-                    "service_rate (mu/capacity)."
-                )
-            }
-        }), 400
-
-    # Fire SMS alerts for critical hubs
-    critical_hubs = [h for h in summary["hubs"] if h["risk"] == "critical"]
-    if critical_hubs:
-        hub = critical_hubs[0]
-        msg = (
-            f"🔴 SITI KERNEL ALERT\n"
-            f"Hub: {hub['hub_id']} — CRITICAL\n"
-            f"Load ρ = {hub['rho']} (at/over capacity)\n"
-            f"Queue: {hub['queue_depth']} shipments backed up\n"
-            f"IRP Score: {hub['irp_score']}/10\n"
-            f"→ Reroute immediately. SITI Intelligence."
-        )
-        summary["sms_alert"] = send_alert(msg, channel="sms")
-
-    return jsonify({
-        "success": True,
-        "summary": summary,
-        "message": (
-            f"Reset complete. "
-            f"{summary['total_rows']} rows processed, "
-            f"{summary['hub_count']} hubs detected."
-        )
-    }), 200
-
-
-# ── ROUTES ─────────────────────────────────────────────────────────────────────
-
-@app.route("/", methods=["GET"])
-@app.route("/api", methods=["GET"])
-@app.route("/api/", methods=["GET"])
-def home():
-    return jsonify({
-        "status":    "SITI Intelligence Kernel Online",
-        "version":   "4.0.0",
-        "timestamp": datetime.utcnow().isoformat(),
-        "endpoints": [
-            "GET  /health",
-            "GET  /ping",
-            "GET  /api/hubs",
-            "GET  /api/kernel/status",
-            "POST /api/kernel/reset",
-            "POST /api/kernel/upload",
-            "POST /api/kernel/predict",
-            "POST /api/kernel/analyze",
-            "POST /api/alerts/test",
-            "POST /api/payments/create-order",
-            "POST /api/payments/cashfree-webhook",
-            "GET  /api/admin/keys",
-            "POST /api/admin/create-key",
-        ]
-    })
-
-
-@app.route("/health", methods=["GET"])
-@app.route("/api/health", methods=["GET"])
-def health():
-    return jsonify({
-        "status":    "healthy",
-        "kernel":    "SITI GSC v4.0",
-        "supabase":  "connected" if get_supabase() else "fallback_mode",
-        "twilio":    "connected" if get_twilio()   else "not_configured",
-        "timestamp": datetime.utcnow().isoformat(),
-    })
-
-
-@app.route("/ping", methods=["GET"])
-def ping():
-    return jsonify({"status": "alive", "ts": datetime.utcnow().isoformat()})
-
-
-# ── CSV Upload endpoints ───────────────────────────────────────────────────────
-@app.route("/api/kernel/reset", methods=["POST"])
-@require_api_key
-def genius_reset():
-    """Primary upload endpoint."""
-    return _handle_upload()
-
-
-@app.route("/kernel/upload", methods=["POST"])
-@app.route("/api/kernel/upload", methods=["POST"])
-@require_api_key
-def kernel_upload():
-    """Alias upload endpoint."""
-    return _handle_upload()
-
-
-# ── Hub Status ─────────────────────────────────────────────────────────────────
-@app.route("/api/kernel/status", methods=["GET"])
-@app.route("/api/kernel/state", methods=["GET"])
-@require_api_key
-def kernel_status():
-    tenant_id = request.headers.get("X-Tenant-ID", "default")
-    kernel    = get_kernel(tenant_id)
-    summary   = kernel._summary()
-    summary["annualized_exposure"] = 2_810_000
-    return jsonify(summary)
-
-
-@app.route("/api/hubs", methods=["GET"])
-@require_api_key
-def list_hubs():
-    tenant_id = request.headers.get("X-Tenant-ID", "default")
-    kernel    = get_kernel(tenant_id)
-    hubs = []
-    for hub_id, s in kernel.hub_stats.items():
-        n = max(s["count"], 1)
-        lam, mu = s["lambda_sum"] / n, s["mu_sum"] / n
-        rho, irp = compute_irp(lam, mu, n)
-        hubs.append({
-            "hub_id":    hub_id,
-            "rho":       rho,
-            "irp_score": irp,
-            "risk":      risk_level(rho),
-            "shipments": n,
-        })
-    return jsonify({"hubs": sorted(hubs, key=lambda h: -h["rho"])})
-
-
-# ── Kalman Prediction ──────────────────────────────────────────────────────────
-@app.route("/api/kernel/predict", methods=["POST"])
-@require_api_key
-def predict():
-    tenant_id = request.headers.get("X-Tenant-ID", "default")
-    kernel    = get_kernel(tenant_id)
-    data      = request.get_json(force=True) or {}
-
-    hub_id = str(data.get("hub_id", "UNKNOWN"))
-    obs    = [float(x) for x in data.get("observations", []) if x is not None]
-
-    if not obs:
-        return jsonify({
-            "error": "Provide at least one observation in 'observations' array."
-        }), 400
-
-    if hub_id not in kernel.kalman_states:
-        kernel.kalman_states[hub_id] = KalmanFilter1D()
-
-    kf       = kernel.kalman_states[hub_id]
-    smoothed = [kf.update(z) for z in obs]
-    predicted = kf.predict_n(5)  # BUG-014 FIX: proper prediction
-    current   = smoothed[-1] if smoothed else kf.x
-
-    result = {
-        "hub_id":             hub_id,
-        "smoothed":           smoothed,
-        "predicted":          predicted,
-        "current_delay_prob": current,
-        "kalman_state":       {"x": kf.x, "P": round(kf.P, 6)},
+    return {
+        "utilisation": round(rho, 4),
+        "avg_queue_length": round(lq, 4),
+        "avg_wait_hours": round(wq, 4),
+        "avg_system_time_hours": round(w, 4),
+        "is_saturated": False,
     }
 
-    if predicted and predicted[-1] > 0.90:
-        hs  = kernel.hub_stats.get(hub_id, {})
-        msg = (
-            f"⚠️ SITI PREDICTION ALERT\n"
-            f"Hub: {hub_id}\n"
-            f"Kalman predicts {predicted[-1]*100:.1f}% delay probability in 5 ticks\n"
-            f"Queue backlog: {int(hs.get('queue_depth', 0))} shipments\n"
-            f"→ Intervene now. SITI Intelligence."
-        )
-        result["alert_fired"]  = True
-        result["alert_result"] = send_alert(msg, channel="sms")
 
-    return jsonify(result)
+def phi_sigmoidal_decay(
+    base_reliability: float,  # R₀ ∈ (0, 1]
+    age_days: float,          # days since last successful delivery
+    steepness: float = 0.15,  # k — controls decay rate
+    inflection_day: float = 7.0,  # d₀ — day of fastest decay
+) -> float:
+    """Φ Sigmoidal Decay — SITI's proprietary reliability scoring function.
 
+    R(t) = R₀ / (1 + e^(k * (t - d₀)))
 
-# ── AI Analysis ────────────────────────────────────────────────────────────────
-@app.route("/api/kernel/analyze", methods=["POST"])
-def analyze_logistics():
-    """Plain-English AI explanation using OpenRouter."""
-    data    = request.get_json(force=True) or {}
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
-
-    if not api_key:
-        hub_id = data.get("hub_id", "Unknown hub")
-        rho    = data.get("rho", 0)
-        return jsonify({
-            "explanation": (
-                f"Hub {hub_id} is showing a load factor ρ={rho:.3f}. "
-               f"This hub is over capacity — arrivals exceed the processing rate." 
-                   'Immediate rerouting is recommended.' if rho > 1 else
-                   'This hub is within normal operating range.'} "
-                f"The Inverse Reliability Paradox indicates that high-value shipments "
-                f"face disproportionate delay risk as utilization approaches critical thresholds."
-            ),
-            "source": "MIMI Kernel (local)"
-        })
-
-    try:
-        prompt = (
-            "You are a logistics operations expert for Indian 3PL companies. "
-            "Explain this hub failure data in plain English for an ops manager "
-            "in 2-3 concise sentences. Be specific, data-driven, and actionable. "
-            f"Data: {json.dumps(data)}"
-        )
-        response = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type":  "application/json",
-                "HTTP-Referer":  "https://siti-intelligence.io",
-            },
-            json={
-                "model":    "google/gemini-2.0-flash-001",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 250,
-            },
-            timeout=30.0
-        )
-        resp_data = response.json()
-        text = resp_data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return jsonify({"explanation": text, "source": "OpenRouter/Gemini"})
-    except Exception as e:
-        log.error("OpenRouter error: %s", e)
-        return jsonify({"error": str(e)}), 500
-
-
-# ── Alerts Test ────────────────────────────────────────────────────────────────
-@app.route("/api/alerts/test", methods=["POST"])
-@require_api_key
-def test_alerts():
-    data    = request.get_json(force=True) or {}
-    channel = data.get("channel", "sms")
-    message = data.get("message", (
-        "✅ SITI Intelligence — Alert test successful!\n"
-        "Twilio integration is working correctly.\n"
-        "Hub monitoring active. Response SLA: 2 min."
-    ))
-    result = send_alert(message, channel=channel)
-    return jsonify({
-        "test":               "alert",
-        "channel":            channel,
-        "result":             result,
-        "twilio_configured":  get_twilio() is not None,
-        "from_number":        os.getenv("TWILIO_FROM_NUMBER", "not_set"),
-        "to_number":          os.getenv("TWILIO_ALERT_NUMBER", "not_set"),
-    })
-
-
-# ── BUG-008 FIX: Cashfree Order Creation ──────────────────────────────────────
-@app.route("/api/payments/create-order", methods=["POST"])
-@require_api_key
-def create_cashfree_order():
+    Captures the non-linear trust erosion when a hub goes silent.
     """
-    BUG-008 FIX: This endpoint was MISSING, causing all payment buttons to
-    silently fall through to WhatsApp. Now creates real Cashfree orders,
-    or falls back to WhatsApp redirect if Cashfree is not configured.
+    import math
+    decay = 1.0 / (1.0 + math.exp(steepness * (age_days - inflection_day)))
+    return round(base_reliability * decay, 6)
+
+
+def detect_irp(
+    shipment_count: int,
+    on_time_count: int,
+    reliability_score: float,
+) -> dict:
+    """Inverse Reliability Paradox (IRP) detection.
+
+    IRP: A hub shows high on-time % but low absolute reliability when
+    volume is suppressed (they cherry-pick easy shipments).
+    Returns a risk flag and severity level.
     """
-    data = request.get_json(force=True) or {}
-    plan = data.get("plan", "pilot")
-    amount = data.get("amount", 9999)
+    if shipment_count == 0:
+        return {"irp_detected": False, "severity": "none", "reason": "no data"}
 
-    cashfree_app_id  = os.getenv("CASHFREE_APP_ID", "")
-    cashfree_secret  = os.getenv("CASHFREE_SECRET_KEY", "")
-    cashfree_env     = os.getenv("CASHFREE_ENV", "sandbox")  # "production" for live
+    surface_otp = on_time_count / shipment_count
 
-    # If Cashfree not configured, return WhatsApp fallback
-    if not cashfree_app_id or not cashfree_secret or cashfree_app_id == "value":
-        wa_number  = os.getenv("WHATSAPP_NUMBER", "918956493671")
-        wa_message = (
-            f"Hi! I want to purchase the SITI Intelligence {plan.upper()} plan "
-            f"(₹{amount:,}/month). Please help me get started."
-        )
-        import urllib.parse
-        wa_url = f"https://wa.me/{wa_number}?text={urllib.parse.quote(wa_message)}"
-        return jsonify({
-            "success":       False,
-            "fallback":      True,
-            "fallback_type": "whatsapp",
-            "whatsapp_url":  wa_url,
-            "reason":        "Payment gateway not configured — redirecting to WhatsApp",
-        }), 200
+    # IRP condition: OTP looks good but Φ-score is collapsing
+    irp_gap = surface_otp - reliability_score
+    irp_detected = irp_gap > 0.25 and reliability_score < 0.6
 
-    # Cashfree is configured — create real order
+    if not irp_detected:
+        severity = "none"
+    elif irp_gap > 0.5:
+        severity = "critical"
+    elif irp_gap > 0.35:
+        severity = "high"
+    else:
+        severity = "medium"
+
+    return {
+        "irp_detected": irp_detected,
+        "severity": severity,
+        "surface_otp": round(surface_otp, 4),
+        "reliability_score": round(reliability_score, 4),
+        "irp_gap": round(irp_gap, 4),
+    }
+
+
+# ===========================================================================
+# SECTION 3 — DATABASE HELPERS (stateless fetch-process-save pattern)
+# ===========================================================================
+
+def _tenant_guard(query, tenant_id: str):
+    """Apply tenant_id filter to every Supabase query — prevents data leakage."""
+    return query.eq("tenant_id", tenant_id)
+
+
+def get_hub(tenant_id: str, hub_id: str) -> dict:
+    """Fetch a single hub record, scoped to tenant."""
+    sb = get_supabase()
+    result = (
+        _tenant_guard(sb.table("hubs").select("*").eq("hub_id", hub_id), tenant_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Hub '{hub_id}' not found.")
+    return rows[0]
+
+
+def upsert_hub(tenant_id: str, hub_data: dict) -> dict:
+    """Create or update a hub record."""
+    hub_data["tenant_id"] = tenant_id
+    hub_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    sb = get_supabase()
+    result = sb.table("hubs").upsert(hub_data).execute()
+    return result.data[0]
+
+
+def get_shipment(tenant_id: str, shipment_id: str) -> dict:
+    sb = get_supabase()
+    result = (
+        _tenant_guard(
+            sb.table("shipments").select("*").eq("shipment_id", shipment_id),
+            tenant_id,
+        ).execute()
+    )
+    rows = result.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Shipment '{shipment_id}' not found.")
+    return rows[0]
+
+
+def upsert_shipment(tenant_id: str, shipment_data: dict) -> dict:
+    shipment_data["tenant_id"] = tenant_id
+    shipment_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    sb = get_supabase()
+    result = sb.table("shipments").upsert(shipment_data).execute()
+    return result.data[0]
+
+
+def list_shipments(tenant_id: str, hub_id: str | None = None) -> list[dict]:
+    sb = get_supabase()
+    query = _tenant_guard(sb.table("shipments").select("*"), tenant_id)
+    if hub_id:
+        query = query.eq("hub_id", hub_id)
+    result = query.order("created_at", desc=True).limit(500).execute()
+    return result.data or []
+
+
+# ===========================================================================
+# SECTION 4 — PYDANTIC SCHEMAS
+# ===========================================================================
+
+class ShipmentIngest(BaseModel):
+    shipment_id: str
+    hub_id: str
+    carrier: str
+    origin: str
+    destination: str
+    promised_transit_hours: float
+    actual_transit_hours: float | None = None
+    status: str = "in_transit"  # in_transit | delivered | exception
+
+
+class HubConfig(BaseModel):
+    hub_id: str
+    hub_name: str
+    city: str
+    max_capacity_per_day: int = Field(ge=1)
+    current_load: int = Field(ge=0, default=0)
+    service_rate_per_hour: float = Field(gt=0)
+    arrival_rate_per_hour: float = Field(gt=0)
+
+
+class AlertRequest(BaseModel):
+    phone_number: str  # E.164 format e.g. +919876543210
+    message: str
+
+
+class CashfreeWebhookPayload(BaseModel):
+    """Minimal fields we need from Cashfree's webhook."""
+    order_id: str
+    order_status: str  # PAID | ACTIVE | EXPIRED
+    customer_details: dict[str, Any] | None = None
+    order_meta: dict[str, Any] | None = None
+
+
+# ===========================================================================
+# SECTION 5 — ROUTES
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 5.1  Health Check (DB-verified — satisfies Render's health probe)
+# ---------------------------------------------------------------------------
+@app.get("/ping", tags=["infra"])
+async def health_check():
+    """Lightweight liveness probe — no auth required."""
+    return {"status": "alive", "ts": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/health", tags=["infra"])
+async def deep_health_check():
+    """Deep health check that verifies Supabase connectivity.
+
+    Render uses this to decide if the deployment succeeded.
+    Returns 200 only when the DB is reachable.
+    """
     try:
-        order_id = f"SITI-{plan.upper()}-{uuid.uuid4().hex[:8].upper()}"
-        cashfree_base = (
-            "https://api.cashfree.com"
-            if cashfree_env == "production"
-            else "https://sandbox.cashfree.com"
+        sb = get_supabase()
+        # Minimal query — just prove the connection works
+        sb.table("api_keys").select("key_value").limit(1).execute()
+        db_status = "connected"
+    except Exception as exc:
+        logger.error("Health check DB failure: %s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "degraded", "db": "unreachable", "error": str(exc)},
         )
 
-        payload = {
-            "order_id":       order_id,
-            "order_amount":   float(amount),
-            "order_currency": "INR",
-            "customer_details": {
-                "customer_id":    f"SITI-CUST-{uuid.uuid4().hex[:8]}",
-                "customer_email": data.get("email", "customer@example.com"),
-                "customer_phone": data.get("phone", "9999999999"),
-                "customer_name":  data.get("name",  "SITI Customer"),
-            },
-            "order_meta": {
-                "return_url": (
-                    f"{os.getenv('FRONTEND_URL', 'https://siti-gsc-kernel.vercel.app')}"
-                    f"?payment=success&plan={plan}&order_id={order_id}"
-                ),
-                "notify_url": (
-                    f"{os.getenv('BACKEND_URL', 'https://siti-gsc-kernel-1.onrender.com')}"
-                    "/api/payments/cashfree-webhook"
-                ),
-            },
-            "order_tags": {"plan": plan},
-        }
+    return {
+        "status": "healthy",
+        "db": db_status,
+        "version": "2.0.0",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
 
-        resp = httpx.post(
-            f"{cashfree_base}/pg/orders",
-            headers={
-                "x-api-version":    "2023-08-01",
-                "x-client-id":      cashfree_app_id,
-                "x-client-secret":  cashfree_secret,
-                "Content-Type":     "application/json",
+
+# ---------------------------------------------------------------------------
+# 5.2  Shipment Ingest + Kalman Update
+# ---------------------------------------------------------------------------
+@app.post("/shipments/ingest", tags=["shipments"])
+async def ingest_shipment(
+    payload: ShipmentIngest,
+    tenant: TenantCtx = Depends(verify_api_key),
+):
+    """Ingest a shipment scan event.
+
+    If actual_transit_hours is provided, runs a Kalman filter update cycle
+    and persists the smoothed ETA estimate back to Supabase.
+    """
+    tenant_id = tenant["tenant_id"]
+
+    # Load existing shipment state (or build fresh)
+    try:
+        existing = get_shipment(tenant_id, payload.shipment_id)
+        kf_state = existing.get("kalman_state") or {}
+    except HTTPException:
+        existing = None
+        kf_state = {}
+
+    kf = KalmanFilter1D.from_dict(kf_state) if kf_state else KalmanFilter1D(
+        initial_estimate=payload.promised_transit_hours
+    )
+
+    smoothed_eta = None
+    if payload.actual_transit_hours is not None:
+        smoothed_eta = kf.update(payload.actual_transit_hours)
+
+    record = {
+        "shipment_id": payload.shipment_id,
+        "hub_id": payload.hub_id,
+        "carrier": payload.carrier,
+        "origin": payload.origin,
+        "destination": payload.destination,
+        "promised_transit_hours": payload.promised_transit_hours,
+        "actual_transit_hours": payload.actual_transit_hours,
+        "smoothed_eta_hours": smoothed_eta,
+        "status": payload.status,
+        "kalman_state": kf.to_dict(),
+    }
+    saved = upsert_shipment(tenant_id, record)
+
+    return {
+        "ok": True,
+        "shipment_id": payload.shipment_id,
+        "smoothed_eta_hours": smoothed_eta,
+        "kalman_state": kf.to_dict(),
+        "saved": saved,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 5.3  Hub Analytics — M/M/1 + Φ Decay + IRP
+# ---------------------------------------------------------------------------
+@app.post("/hubs/configure", tags=["hubs"])
+async def configure_hub(
+    payload: HubConfig,
+    tenant: TenantCtx = Depends(verify_api_key),
+):
+    """Create or update a hub configuration."""
+    tenant_id = tenant["tenant_id"]
+    record = payload.model_dump()
+    saved = upsert_hub(tenant_id, record)
+    return {"ok": True, "hub": saved}
+
+
+@app.get("/hubs/{hub_id}/analytics", tags=["hubs"])
+async def hub_analytics(
+    hub_id: str,
+    tenant: TenantCtx = Depends(verify_api_key),
+):
+    """Run full analytics pipeline for a hub:
+    1. M/M/1 queue metrics
+    2. Φ Sigmoidal reliability score
+    3. IRP detection
+    """
+    tenant_id = tenant["tenant_id"]
+    hub = get_hub(tenant_id, hub_id)
+    shipments = list_shipments(tenant_id, hub_id=hub_id)
+
+    # M/M/1
+    queue = mm1_queue_metrics(
+        arrival_rate=hub.get("arrival_rate_per_hour", 1.0),
+        service_rate=hub.get("service_rate_per_hour", 2.0),
+    )
+
+    # Φ Decay — days since last delivered shipment
+    delivered = [s for s in shipments if s.get("status") == "delivered"]
+    if delivered:
+        last_ts_str = max(s["updated_at"] for s in delivered)
+        last_ts = datetime.fromisoformat(last_ts_str.replace("Z", "+00:00"))
+        age_days = (datetime.now(timezone.utc) - last_ts).total_seconds() / 86400
+    else:
+        age_days = 30.0  # assume worst case if no data
+
+    base_reliability = hub.get("base_reliability", 0.95)
+    phi_score = phi_sigmoidal_decay(base_reliability, age_days)
+
+    # IRP
+    on_time = sum(
+        1
+        for s in delivered
+        if s.get("actual_transit_hours") is not None
+        and s.get("promised_transit_hours") is not None
+        and s["actual_transit_hours"] <= s["promised_transit_hours"]
+    )
+    irp = detect_irp(len(delivered), on_time, phi_score)
+
+    return {
+        "hub_id": hub_id,
+        "queue_metrics": queue,
+        "phi_reliability_score": phi_score,
+        "age_days_since_last_delivery": round(age_days, 2),
+        "irp": irp,
+        "total_shipments_tracked": len(shipments),
+        "delivered_count": len(delivered),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 5.4  SMS Alerts via Twilio
+# ---------------------------------------------------------------------------
+@app.post("/alerts/sms", tags=["alerts"])
+async def send_sms_alert(
+    payload: AlertRequest,
+    tenant: TenantCtx = Depends(verify_api_key),
+):
+    """Send an SMS alert via Twilio.  Uses httpx (no requests library)."""
+    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
+        raise HTTPException(
+            status_code=503,
+            detail="Twilio credentials not configured on this deployment.",
+        )
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            url,
+            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+            data={
+                "From": TWILIO_FROM_NUMBER,
+                "To": payload.phone_number,
+                "Body": payload.message,
             },
+        )
+
+    if resp.status_code not in (200, 201):
+        logger.error("Twilio error: %s — %s", resp.status_code, resp.text)
+        raise HTTPException(status_code=502, detail="SMS dispatch failed.")
+
+    sid = resp.json().get("sid")
+    logger.info("SMS sent | tenant=%s | sid=%s", tenant["tenant_id"], sid)
+    return {"ok": True, "twilio_sid": sid}
+
+
+# ===========================================================================
+# SECTION 6 — PAYMENT PIPELINE (Cashfree full automation)
+# ===========================================================================
+
+@app.post("/payments/create-order", tags=["payments"])
+async def create_cashfree_order(
+    request: Request,
+    tenant: TenantCtx = Depends(verify_api_key),
+):
+    """Create a Cashfree payment order and return the payment session ID.
+
+    The frontend uses this session ID to open Cashfree's payment SDK.
+    On success, Cashfree calls our /payments/webhook endpoint.
+    """
+    body = await request.json()
+    order_amount = body.get("amount")  # INR, e.g. 4999
+    customer_phone = body.get("phone")
+    customer_email = body.get("email")
+    customer_name = body.get("name", "SITI Client")
+
+    if not all([order_amount, customer_phone, customer_email]):
+        raise HTTPException(status_code=422, detail="amount, phone, email required.")
+
+    tenant_id = tenant["tenant_id"]
+    order_id = f"SITI-{tenant_id[:8].upper()}-{int(time.time())}"
+
+    payload = {
+        "order_id": order_id,
+        "order_amount": float(order_amount),
+        "order_currency": "INR",
+        "customer_details": {
+            "customer_id": tenant_id,
+            "customer_name": customer_name,
+            "customer_email": customer_email,
+            "customer_phone": customer_phone,
+        },
+        "order_meta": {
+            "tenant_id": tenant_id,
+            "notify_url": os.environ.get("CASHFREE_WEBHOOK_URL", ""),
+        },
+    }
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{CASHFREE_BASE}/orders",
             json=payload,
-            timeout=15.0,
+            headers={
+                "x-client-id": CASHFREE_CLIENT_ID,
+                "x-client-secret": CASHFREE_CLIENT_SECRET,
+                "x-api-version": "2023-08-01",
+                "Content-Type": "application/json",
+            },
         )
 
-        if resp.status_code in (200, 201):
-            order_data = resp.json()
-            return jsonify({
-                "success":            True,
-                "order_id":           order_id,
-                "payment_session_id": order_data.get("payment_session_id"),
-                "order_status":       order_data.get("order_status"),
-            }), 200
-        else:
-            log.error("Cashfree order creation failed: %s", resp.text)
-            return jsonify({
-                "success": False,
-                "error":   "Payment gateway error",
-                "details": resp.text[:200],
-            }), 502
+    if resp.status_code not in (200, 201):
+        logger.error("Cashfree order creation failed: %s", resp.text)
+        raise HTTPException(status_code=502, detail="Payment gateway error.")
 
-    except Exception as e:
-        log.error("Cashfree order creation exception: %s", e)
-        return jsonify({"success": False, "error": str(e)}), 500
+    cf_data = resp.json()
+    return {
+        "ok": True,
+        "order_id": order_id,
+        "payment_session_id": cf_data.get("payment_session_id"),
+        "cf_order_id": cf_data.get("cf_order_id"),
+    }
 
 
-# ── Cashfree Webhook ───────────────────────────────────────────────────────────
-@app.route("/api/payments/cashfree-webhook", methods=["POST"])
-def cashfree_webhook():
+@app.post("/payments/webhook", tags=["payments"])
+async def cashfree_webhook(request: Request):
+    """Cashfree webhook handler — ZERO manual intervention.
+
+    On PAID status:
+    1. Verify signature (HMAC-SHA256).
+    2. Extract tenant_id from order_meta.
+    3. Auto-provision an API key in the `api_keys` table.
+    4. (Optional) Send welcome SMS via Twilio.
+
+    This endpoint is PUBLIC — no API key auth required.
+    Security is provided by Cashfree's HMAC signature.
     """
-    BUG-009 FIX: Correct Cashfree webhook signature verification.
-    Cashfree uses HMAC-SHA256 of (timestamp + "." + raw_body).
-    """
-    payload_bytes  = request.get_data()
-    sig_header     = request.headers.get("x-webhook-signature", "")
-    ts_header      = request.headers.get("x-webhook-timestamp", "")
-    webhook_secret = os.getenv("CASHFREE_WEBHOOK_SECRET", "")
+    raw_body = await request.body()
+    cf_signature = request.headers.get("x-webhook-signature", "")
+    cf_timestamp = request.headers.get("x-webhook-timestamp", "")
 
+    # --- Signature Verification ---
+    webhook_secret = os.environ.get("CASHFREE_WEBHOOK_SECRET", "")
     if webhook_secret:
-        # BUG-009 FIX: Correct signature format: timestamp + "." + payload
-        sig_body = ts_header + "." + payload_bytes.decode("utf-8")
         expected = hmac.new(
-            webhook_secret.encode("utf-8"),
-            sig_body.encode("utf-8"),
-            hashlib.sha256
+            webhook_secret.encode(),
+            (cf_timestamp + raw_body.decode()).encode(),
+            hashlib.sha256,
         ).hexdigest()
+        if not hmac.compare_digest(expected, cf_signature):
+            logger.warning("Cashfree webhook: invalid signature — request rejected.")
+            raise HTTPException(status_code=400, detail="Invalid webhook signature.")
+    else:
+        logger.warning("CASHFREE_WEBHOOK_SECRET not set — skipping signature check.")
 
-        if not hmac.compare_digest(expected, sig_header):
-            log.warning("Cashfree webhook signature mismatch — rejecting")
-            return jsonify({"error": "Invalid signature"}), 400
+    import json
+    data = json.loads(raw_body)
+
+    order_status = data.get("data", {}).get("order", {}).get("order_status", "")
+    order_id = data.get("data", {}).get("order", {}).get("order_id", "")
+    order_meta = data.get("data", {}).get("order", {}).get("order_meta", {}) or {}
+    customer = data.get("data", {}).get("customer_details", {}) or {}
+    tenant_id = order_meta.get("tenant_id", "")
+
+    logger.info(
+        "Cashfree webhook | order=%s | status=%s | tenant=%s",
+        order_id,
+        order_status,
+        tenant_id,
+    )
+
+    if order_status != "PAID":
+        return {"received": True, "action": "none", "order_status": order_status}
+
+    if not tenant_id:
+        logger.error("Cashfree PAID webhook missing tenant_id in order_meta.")
+        return {"received": True, "action": "error", "detail": "missing tenant_id"}
+
+    # --- Auto-provision API Key ---
+    import secrets
+    new_key = f"siti_{secrets.token_urlsafe(32)}"
+    key_record = {
+        "tenant_id": tenant_id,
+        "key_value": new_key,
+        "is_active": True,
+        "created_from_order": order_id,
+        "customer_email": customer.get("customer_email", ""),
+        "customer_phone": customer.get("customer_phone", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
 
     try:
-        data = request.get_json(force=True) or {}
-    except Exception:
-        return jsonify({"error": "Invalid JSON payload"}), 400
+        sb = get_supabase()
+        sb.table("api_keys").insert(key_record).execute()
+        logger.info("API key provisioned | tenant=%s | order=%s", tenant_id, order_id)
+    except Exception as exc:
+        logger.error("Failed to provision API key: %s", exc)
+        return {"received": True, "action": "error", "detail": str(exc)}
 
-    order_id   = data.get("data", {}).get("order", {}).get("order_id", "")
-    payment_id = data.get("data", {}).get("payment", {}).get("cf_payment_id", "")
-    status     = data.get("data", {}).get("payment", {}).get("payment_status", "")
-    plan       = data.get("data", {}).get("order", {}).get("order_tags", {}).get("plan", "pilot")
-
-    log.info("Cashfree webhook: order=%s payment=%s status=%s plan=%s",
-             order_id, payment_id, status, plan)
-
-    if status == "SUCCESS":
-        import secrets as secrets_mod
-        new_key = f"siti-{plan}-{secrets_mod.token_urlsafe(16)}"
-
-        db = get_supabase()
-        if db:
-            try:
-                db.table("api_keys").insert({
-                    "key":        new_key,
-                    "role":       "OPERATOR",
-                    "plan":       plan,
-                    "active":     True,
-                    "order_id":   order_id,
-                    "payment_id": str(payment_id),
-                    "created_at": datetime.utcnow().isoformat(),
-                }).execute()
-                log.info("API key provisioned for order %s: %s", order_id, new_key[:20])
-            except Exception as e:
-                log.error("Failed to store API key in Supabase: %s", e)
-
-        # Welcome message
-        welcome_msg = (
-            f"🎉 SITI Intelligence — Payment Confirmed!\n"
-            f"Plan: {plan.upper()}\n"
-            f"Order: {order_id}\n"
-            f"Your API key: {new_key}\n"
-            f"Dashboard: https://siti-gsc-kernel.vercel.app\n"
-            f"Support: wa.me/918956493671"
+    # --- Optional welcome SMS ---
+    phone = customer.get("customer_phone")
+    if phone and all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
+        msg = (
+            f"Welcome to SITI Intelligence! Your API key: {new_key}\n"
+            f"Docs: https://siti-gsc-kernel.onrender.com/docs\n"
+            f"Keep this safe. Support: siti@yourdomain.com"
         )
-        send_alert(welcome_msg, channel="whatsapp")
-
-        return jsonify({
-            "received":    True,
-            "provisioned": True,
-            "plan":        plan,
-            "key_prefix":  new_key[:20] + "...",
-        })
-
-    return jsonify({"received": True, "provisioned": False, "status": status})
-
-
-# ── Admin ──────────────────────────────────────────────────────────────────────
-@app.route("/api/admin/keys", methods=["GET"])
-@require_api_key
-def list_keys():
-    db = get_supabase()
-    if not db:
-        return jsonify({
-            "mode":  "fallback",
-            "keys":  list(_FALLBACK_KEYS),
-            "note":  "Configure Supabase env vars for persistent key storage."
-        })
-    try:
-        res = db.table("api_keys").select("key,plan,active,created_at").eq("active", True).execute()
-        return jsonify({"keys": res.data})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/admin/create-key", methods=["POST"])
-@require_api_key
-def create_key():
-    import secrets as secrets_mod
-    data    = request.get_json(force=True) or {}
-    plan    = data.get("plan", "pilot")
-    new_key = f"siti-{plan}-{secrets_mod.token_urlsafe(16)}"
-
-    db = get_supabase()
-    if db:
         try:
-            db.table("api_keys").insert({
-                "key":        new_key,
-                "role":       data.get("role", "OPERATOR"),
-                "plan":       plan,
-                "active":     True,
-                "created_at": datetime.utcnow().isoformat(),
-            }).execute()
-        except Exception as e:
-            log.warning("Supabase key insert failed: %s", e)
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json",
+                    auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+                    data={"From": TWILIO_FROM_NUMBER, "To": phone, "Body": msg},
+                )
+        except Exception as exc:
+            logger.warning("Welcome SMS failed (non-fatal): %s", exc)
 
-    return jsonify({"key": new_key, "plan": plan, "active": True})
-
-
-# ── Error Handlers ─────────────────────────────────────────────────────────────
-@app.errorhandler(404)
-def not_found(e):
-    return jsonify({
-        "error": "Route not found.",
-        "path":  request.path,
-        "hint":  "Check /api for available endpoints."
-    }), 404
+    return {
+        "received": True,
+        "action": "key_provisioned",
+        "tenant_id": tenant_id,
+        "order_id": order_id,
+    }
 
 
-@app.errorhandler(405)
-def method_not_allowed(e):
-    return jsonify({
-        "error":   "Method not allowed.",
-        "allowed": list(e.valid_methods or [])
-    }), 405
+# ===========================================================================
+# SECTION 7 — ADMIN
+# ===========================================================================
 
+@app.get("/admin/tenants", tags=["admin"])
+async def list_tenants(
+    x_admin_secret: str = Header(..., alias="X-Admin-Secret"),
+):
+    """List all active tenants.  Protected by a separate admin secret,
+    not a tenant API key.
+    """
+    expected = os.environ.get("SITI_ADMIN_SECRET", "")
+    if not expected or not hmac.compare_digest(x_admin_secret, expected):
+        raise HTTPException(status_code=401, detail="Invalid admin secret.")
 
-@app.errorhandler(500)
-def server_error(e):
-    log.error("500 Internal Error: %s", e)
-    return jsonify({"error": "Internal kernel error. Check server logs."}), 500
-
-
-# ── Entry Point ────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    log.info("SITI Intelligence Kernel v4.0 starting on port %d", port)
-    app.run(host="0.0.0.0", port=port, debug=False)
+    sb = get_supabase()
+    result = sb.table("api_keys").select("tenant_id, customer_email, created_at, is_active").execute()
+    return {"tenants": result.data or []}
