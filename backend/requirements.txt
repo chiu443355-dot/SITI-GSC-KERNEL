@@ -21,3 +21,5 @@ supabase==2.4.2
 
 # Twilio SMS / WhatsApp (optional — gracefully skipped)
 twilio==9.2.3
+
+motor==3.3.2
