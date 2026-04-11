@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from supabase import create_client, Client
 from pydantic import BaseModel
 import os, re, logging, random, asyncio, json, time, hashlib, hmac
 import numpy as np
@@ -20,6 +21,11 @@ load_dotenv(ROOT_DIR / '.env')
 
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 db_name = os.environ.get('DB_NAME', 'siti_sovereign')
+
+# ─── SUPABASE INIT ────────────────────────────────────────────────────────────
+supabase_url = os.environ.get("SUPABASE_URL")
+supabase_key = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(supabase_url, supabase_key) if supabase_url and supabase_key else None
 
 # ─── LAZY MONGO INIT ──────────────────────────────────────────────────────────
 client = None
@@ -52,6 +58,7 @@ MAX_CSV_BYTES = 50 * 1024 * 1024  # P2-2: 50MB hard limit
 MAX_TOTAL_ROWS = 1_000_000        # Tier 1 Guardrail: prevent OOM
 
 # ─── API KEY STORE ────────────────────────────────────────────────────────────
+ADMIN_TENANT_IDS = {"SITI_ADMIN_001", "DEMO_CLIENT_001"}
 _api_keys: dict = {}
 ROLES = {"ADMIN", "OPERATOR", "INTEGRATOR", "READONLY"}
 ROLE_PERMISSIONS = {
@@ -64,6 +71,30 @@ ROLE_PERMISSIONS = {
 # ─── P0-1: PER-TENANT SESSION ISOLATION ──────────────────────────────────────
 _sessions: dict[str, dict] = {}
 MAX_SESSIONS = 200
+
+def load_kf_state(tenant_id: str) -> dict:
+    """FIX 1: Load Kalman state from Supabase."""
+    if supabase:
+        try:
+            res = supabase.table("kf_states").select("state_json").eq("tenant_id", tenant_id).single().execute()
+            if res.data:
+                return json.loads(res.data["state_json"])
+        except Exception:
+            pass
+    # Fresh state — P=1, x=0
+    return {"x_hat": 0.0, "P": 1.0, "Q": 1e-5, "R": 0.01}
+
+def save_kf_state(tenant_id: str, state: dict):
+    """FIX 1: Upsert Kalman state into Supabase."""
+    if supabase:
+        try:
+            supabase.table("kf_states").upsert({
+                "tenant_id": tenant_id,
+                "state_json": json.dumps(state),
+                "updated_at": "now()"
+            }, on_conflict="tenant_id").execute()
+        except Exception as e:
+            logger.warning(f"KF state save failed: {e}")
 
 def _get_session(key: str) -> dict:
     """Get or create a per-tenant session. LRU evict when full."""
@@ -84,8 +115,10 @@ def _get_session(key: str) -> dict:
         }
     return _sessions[key]
 
-# ─── P0-3: RAZORPAY SIGNATURE VERIFICATION ───────────────────────────────────
+# ─── P0-3: WEBHOOK SIGNATURE VERIFICATION ────────────────────────────────────
 RAZORPAY_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+CASHFREE_WEBHOOK_SECRET = os.environ.get("CASHFREE_WEBHOOK_SECRET", "")
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "changeme")
 SENDGRID_KEY = os.environ.get("SENDGRID_KEY", "")
 
 # ─── API KEY LOADING ──────────────────────────────────────────────────────────
@@ -101,13 +134,41 @@ def _load_env_keys():
 
 # ─── P0-4: NO ANONYMOUS ACCESS ───────────────────────────────────────────────
 def _verify_api_key(x_api_key: str = Header(default=None)) -> dict:
-    """Dependency: validate API key from X-API-KEY header. No anonymous fallback."""
+    """
+    Dependency: validate API key from X-API-KEY header. No anonymous fallback.
+    FIX 2: Admin bypass and Supabase lookup.
+    """
     if not x_api_key:
         raise HTTPException(status_code=401, detail="X-API-KEY header required")
+
+    # Local memory check first (legacy)
     key_data = _api_keys.get(x_api_key)
-    if not key_data or not key_data.get("active"):
-        raise HTTPException(status_code=401, detail="Invalid or inactive API key")
-    return key_data
+    if key_data and key_data.get("active"):
+        # Admin bypass
+        if key_data.get("client") in ADMIN_TENANT_IDS:
+            return key_data
+        return key_data
+
+    # FIX 2: Supabase lookup with hash
+    if supabase:
+        try:
+            key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
+            res = supabase.table("api_keys") \
+                .select("tenant_id, is_active, plan, role") \
+                .eq("key_hash", key_hash) \
+                .single() \
+                .execute()
+            if res.data:
+                tenant = res.data
+                # Admin bypass
+                if tenant["tenant_id"] in ADMIN_TENANT_IDS:
+                    return {"role": tenant.get("role", "ADMIN"), "client": tenant["tenant_id"], "active": True}
+                if tenant["is_active"]:
+                    return {"role": tenant.get("role", "OPERATOR"), "client": tenant["tenant_id"], "active": True}
+        except Exception as e:
+            logger.warning(f"Supabase key verify failed: {e}")
+
+    raise HTTPException(status_code=401, detail="Invalid or inactive API key")
 
 def _require_role(required_roles: set):
     """P2-6: Clear, auditable role-based access control."""
@@ -643,6 +704,58 @@ async def lifespan(app: FastAPI):
     # Load API keys from env
     _load_env_keys()
 
+# ─── FIX 3: Safe Schema Migration ─────────────────────────────────────────────
+    def init_db_migration():
+        if not supabase: return
+        migrations = [
+            """
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id          BIGSERIAL PRIMARY KEY,
+                tenant_id   TEXT UNIQUE NOT NULL,
+                key_value   TEXT,
+                key_hash    TEXT,
+                role        TEXT DEFAULT 'OPERATOR',
+                is_active   BOOLEAN DEFAULT FALSE,
+                plan        TEXT DEFAULT 'pilot',
+                created_at  TIMESTAMPTZ DEFAULT now()
+            );
+            """,
+            "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_hash TEXT;",
+            "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT 'pilot';",
+            "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'OPERATOR';",
+            "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT FALSE;",
+            """
+            CREATE TABLE IF NOT EXISTS kf_states (
+                tenant_id   TEXT PRIMARY KEY,
+                state_json  TEXT NOT NULL,
+                updated_at  TIMESTAMPTZ DEFAULT now()
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS shipments (
+                id              BIGSERIAL PRIMARY KEY,
+                tenant_id       TEXT NOT NULL,
+                awb             TEXT,
+                delay_prob      FLOAT,
+                irp_score       FLOAT,
+                hub             TEXT,
+                status          TEXT,
+                raw_data        JSONB,
+                created_at      TIMESTAMPTZ DEFAULT now()
+            );
+            """,
+            "ALTER TABLE shipments ADD COLUMN IF NOT EXISTS hub TEXT;",
+            "ALTER TABLE shipments ADD COLUMN IF NOT EXISTS irp_score FLOAT;",
+        ]
+        for sql in migrations:
+            try:
+                # Assuming 'exec_sql' RPC is enabled in Supabase
+                supabase.rpc("exec_sql", {"query": sql}).execute()
+            except Exception as e:
+                logger.warning(f"Migration skipped or failed (safe): {e}")
+
+    init_db_migration()
+
     # P1-2: Lazy MongoDB init with graceful degradation
     try:
         client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=3000)
@@ -1078,6 +1191,106 @@ async def intercept_schema():
     }
 
 
+@api_router.post("/ingest/bulk")
+async def bulk_ingest(request: Request, key_data: dict = Depends(_verify_api_key)):
+    """
+    FIX 5: API-First bulk shipment ingestion.
+    Accepts JSON array of shipment records.
+    Runs Kalman + IRP on each, stores to Supabase (if available), returns summary.
+    """
+    import math
+    tenant_id = key_data.get("client", "default")
+    session = _get_session(tenant_id)
+
+    try:
+        records = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Payload must be a JSON array")
+
+    if not isinstance(records, list):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON array")
+
+    if len(records) > 10_000:
+        raise HTTPException(status_code=400, detail="Max 10,000 records per batch")
+
+    # Load KF state (FIX 1)
+    kf_state = load_kf_state(tenant_id)
+
+    processed = []
+    errors = []
+
+    for i, rec in enumerate(records):
+        try:
+            awb = rec.get("awb", f"AUTO_{i}")
+            hub_name = rec.get("hub", "Unknown")
+            status = rec.get("status", "Unknown")
+
+            # ── Kalman Filter step (FIX 5) ────────────────────────────────────
+            # Observation: 1.0 if delayed, 0.0 otherwise
+            z = 1.0 if "delay" in status.lower() else 0.0
+
+            x_hat = kf_state["x_hat"]
+            P = kf_state["P"]
+            Q = kf_state["Q"]
+            R = kf_state["R"]
+
+            # Predict
+            x_pred = x_hat
+            P_pred = P + Q
+
+            # Update
+            K = P_pred / (P_pred + R)
+            x_hat = x_pred + K * (z - x_pred)
+            P = (1 - K) * P_pred
+
+            kf_state.update({"x_hat": x_hat, "P": P})
+            delay_prob = round(float(x_hat), 4)
+
+            # ── IRP Score (simplified per hub) ────────────────────────────────
+            PHI = 1.618
+            N = rec.get("shipment_count", 1)
+            irp_score = round(PHI * math.log(N + 1), 4)
+
+            row = {
+                "tenant_id": tenant_id,
+                "awb": awb,
+                "hub": hub_name,
+                "status": status,
+                "delay_prob": delay_prob,
+                "irp_score": irp_score,
+                "raw_data": rec,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            processed.append(row)
+
+        except Exception as e:
+            errors.append({"index": i, "awb": rec.get("awb", "?"), "error": str(e)})
+
+    # Save KF state back (FIX 1)
+    save_kf_state(tenant_id, kf_state)
+
+    # Bulk upsert to Supabase if available
+    saved = 0
+    if supabase and processed:
+        for chunk_start in range(0, len(processed), 500):
+            chunk = processed[chunk_start:chunk_start + 500]
+            try:
+                supabase.table("shipments").insert(chunk).execute()
+                saved += len(chunk)
+            except Exception as e:
+                logger.error(f"Bulk insert chunk failed: {e}")
+    else:
+        saved = len(processed) # In-memory only if no Supabase
+
+    return {
+        "status": "ok",
+        "submitted": len(records),
+        "processed": saved,
+        "errors": errors,
+        "kf_state": {"delay_prob": kf_state["x_hat"], "P": kf_state["P"]},
+    }
+
+
 # ─── ADMIN: KEY MANAGEMENT ───────────────────────────────────────────────────
 
 class CreateKeyRequest(BaseModel):
@@ -1154,6 +1367,67 @@ PLAN_CONFIG = {
     "enterprise": {"role": "ADMIN",       "display": "ENTERPRISE — Custom"},
 }
 
+
+def verify_cashfree_signature(body: bytes, sig: str, timestamp: str) -> bool:
+    """FIX 4: Cashfree HMAC-SHA256 verification."""
+    if not CASHFREE_WEBHOOK_SECRET:
+        logger.error("CASHFREE_WEBHOOK_SECRET not set — rejecting all webhooks")
+        return False
+    if not sig or not timestamp:
+        return False
+    message = timestamp.encode() + body
+    expected_sig = hmac.new(CASHFREE_WEBHOOK_SECRET.encode(), message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected_sig, sig)
+
+@api_router.post("/payments/mock-activate")
+async def mock_activate(request: Request):
+    """FIX 2: Internal route to toggle is_active = true for a tenant."""
+    secret = request.headers.get("X-Admin-Secret", "")
+    if secret != ADMIN_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    data = await request.json()
+    tenant_id = data.get("tenant_id")
+    plan = data.get("plan", "pilot")
+
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="tenant_id required")
+
+    if supabase:
+        try:
+            supabase.table("api_keys").update({"is_active": True, "plan": plan}).eq("tenant_id", tenant_id).execute()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Supabase update failed: {e}")
+
+    return {"status": "activated", "tenant_id": tenant_id, "plan": plan}
+
+@api_router.post("/payments/cashfree-webhook")
+async def cashfree_webhook(request: Request):
+    """FIX 4: Cashfree webhook with signature verification."""
+    body = await request.body()
+    sig = request.headers.get("x-webhook-signature", "")
+    timestamp = request.headers.get("x-webhook-timestamp", "")
+
+    if not verify_cashfree_signature(body, sig, timestamp):
+        logger.warning("Cashfree webhook: invalid signature — rejected")
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    payload = json.loads(body)
+    event = payload.get("type", "")
+
+    if event == "PAYMENT_SUCCESS_WEBHOOK":
+        order_id = payload.get("data", {}).get("order", {}).get("order_id", "")
+        tenant_id = order_id.split("_")[0] if "_" in order_id else order_id
+        plan = payload.get("data", {}).get("order", {}).get("order_tags", {}).get("plan", "pilot")
+
+        if supabase:
+            try:
+                supabase.table("api_keys").update({"is_active": True, "plan": plan}).eq("tenant_id", tenant_id).execute()
+                logger.info(f"Activated tenant {tenant_id} on plan {plan} via Cashfree")
+            except Exception as e:
+                logger.error(f"Cashfree activation failed for {tenant_id}: {e}")
+
+    return {"status": "received"}
 
 @api_router.post("/payments/razorpay-webhook")
 async def razorpay_webhook(request: Request):
