@@ -1,967 +1,983 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import axios from "axios";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
-import {
-  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, ReferenceLine,
-  LineChart, Line, Area, AreaChart, Legend
-} from "recharts";
 
-// ─── CONFIG ───────────────────────────────────────────────────────────────────
-const API_BASE = process.env.REACT_APP_BACKEND_URL || "https://siti-gsc-kernel-1.onrender.com";
-const API = `${API_BASE}/api`;
+// ── Config ───────────────────────────────────────────────────────────────────
+const API_BASE  = (process.env.REACT_APP_BACKEND_URL || "https://siti-gsc-kernel-1.onrender.com").replace(/\/$/, "");
+const API_KEY   = process.env.REACT_APP_API_KEY || "siti-admin-key-001";
+const WA_NUMBER = "918956493671";
+const WA_SUPPORT_MSG = encodeURIComponent(
+  "Hi! I came from SITI Intelligence. I'd like to know more about your logistics platform."
+);
 
-// ─── THEME ────────────────────────────────────────────────────────────────────
+// ── Fonts ─────────────────────────────────────────────────────────────────────
+const FONTS = `@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');`;
+
+// ── Color Palette ─────────────────────────────────────────────────────────────
 const C = {
-  gold: "#FFB340", goldDim: "#FFB34044",
-  red: "#FF3B30", redDim: "#FF3B3033",
-  green: "#32D74B", greenDim: "#32D74B33",
-  blue: "#64D2FF", blueDim: "#64D2FF33",
-  yellow: "#FFD60A", neonGreen: "#39FF14",
-  bg: "#050505", surface: "#0A0A0A", panel: "#080808",
-  border: "#161616", borderBright: "#1F1F1F",
-  text: "#D4D4D8", textDim: "#555", textMuted: "#333",
+  bg: "#08080f", surface: "#0f0f1a", card: "#141422", cardHover: "#1a1a2e",
+  border: "#1e1e35", borderHi: "#2e2e50", accent: "#5b5bd6", accentLt: "#818cf8",
+  teal: "#14b8a6", coral: "#f87171", amber: "#f59e0b", emerald: "#10b981",
+  rose: "#fb7185", text: "#e8e8f0", muted: "#6b6b8a", dim: "#3a3a5c",
 };
 
-// ─── CSV PRE-PROCESSOR ────────────────────────────────────────────────────────
-const PRE_PROCESSOR_MAP = {
-  "Reached.on.Time_Y.N":  ["late", "delayed", "delay", "status", "on_time", "ontime", "target", "delivery_status", "reached"],
-  "Weight_in_gms":        ["wt", "weight", "mass", "gms", "grams", "weight_g", "weight_grams"],
-  "Warehouse_block":      ["block", "hub", "location", "wh", "area", "warehouse", "wh_block", "depot"],
-  "Product_importance":   ["priority", "rank", "importance", "vips", "tier", "prod_imp"],
-  "Mode_of_Shipment":     ["mode", "shipment", "transport", "carrier", "ship_mode", "method"],
-  "Customer_care_calls":  ["care_calls", "cc_calls", "support_calls", "customer_care", "calls"],
-  "Customer_rating":      ["rating", "score", "csat", "satisfaction", "stars"],
-  "Cost_of_the_Product":  ["cost", "price", "product_cost", "amount", "value"],
-  "Prior_purchases":      ["prior", "previous", "purchases", "buy_count", "order_count"],
-  "Discount_offered":     ["discount", "promo", "rebate", "offer", "coupon"],
-  "Gender":               ["gender", "sex", "g", "customer_gender"],
-};
+// ── Chart JS Lazy Loader ──────────────────────────────────────────────────────
+const loadChartJS = () => new Promise((resolve) => {
+  if (window.Chart) return resolve(window.Chart);
+  const s = document.createElement("script");
+  s.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js";
+  s.onload = () => resolve(window.Chart);
+  document.head.appendChild(s);
+});
 
-function preprocessCSV(csvText) {
-  const lines = csvText.split("\n");
-  if (!lines.length) return csvText;
-  const headers = lines[0].split(",").map(h => h.trim().replace(/^["']|["']$/g, ""));
-  const newHeaders = headers.map(h => {
-    const lower = h.toLowerCase().replace(/[\s\-\.]/g, "_");
-    for (const [target, keywords] of Object.entries(PRE_PROCESSOR_MAP)) {
-      for (const kw of keywords) {
-        if (lower === kw || lower.includes(kw)) return target;
-      }
-    }
-    return h;
-  });
-  lines[0] = newHeaders.join(",");
-  return lines.join("\n");
-}
+// ── Pricing Plans ─────────────────────────────────────────────────────────────
+const PLANS = [
+  {
+    id: "pilot",
+    name: "Pilot",
+    priceLabel: "₹9,999",
+    priceNum: 9999,
+    period: "/month",
+    tagline: "30-day proof of value. No commitment.",
+    calls: "5,000 API calls",
+    hubs: "Up to 3 hubs",
+    sms: "30 SMS alerts",
+    features: [
+      "Kalman filter delay predictions",
+      "IRP score per hub",
+      "CSV dataset ingestion",
+      "Email support within 48h",
+      "Upgrade anytime, no penalty",
+    ],
+    color: C.teal,
+    recommended: false,
+    cta: "Start Pilot →",
+  },
+  {
+    id: "growth",
+    name: "Growth",
+    priceLabel: "₹45,999",
+    priceNum: 45999,
+    period: "/month",
+    tagline: "For 3PLs processing 10K–500K shipments/month.",
+    calls: "1,00,000 API calls",
+    hubs: "Up to 25 hubs",
+    sms: "500 SMS alerts",
+    features: [
+      "Everything in Pilot",
+      "Twilio SMS alerts",
+      "AI failure explanation",
+      "Real-time hub dashboard",
+      "Priority support within 12h",
+      "Dedicated API key per tenant",
+    ],
+    color: C.accent,
+    recommended: true,
+    cta: "Activate Growth →",
+  },
+  {
+    id: "enterprise",
+    name: "Enterprise",
+    priceLabel: "₹75,000+",
+    priceNum: null,
+    period: "/month",
+    tagline: "Dedicated instance. SLA-backed. Built for scale.",
+    calls: "Unlimited calls",
+    hubs: "Unlimited hubs",
+    sms: "Unlimited alerts",
+    features: [
+      "Everything in Growth",
+      "Dedicated kernel on your infra",
+      "99.9% uptime SLA",
+      "Custom CSV schema mapping",
+      "Onboarding + training session",
+      "Direct engineering line",
+    ],
+    color: C.amber,
+    recommended: false,
+    cta: "WhatsApp Us →",
+  },
+];
 
-async function readFileResilient(file) {
-  const buffer = await file.arrayBuffer();
-  const utf8 = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
-  if (utf8.includes("\uFFFD")) {
-    return new TextDecoder("iso-8859-1").decode(buffer);
+const ROI_SAVINGS = Math.round(50000 * 0.12 * 1200 * 0.15);
+
+// ── API Helper ────────────────────────────────────────────────────────────────
+async function apiCall(path, options = {}) {
+  const url = `${API_BASE}${path}`;
+  const headers = {
+    "X-API-Key": API_KEY,
+    ...options.headers,
+  };
+  const res = await fetch(url, { ...options, headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw Object.assign(new Error(err.error || "API Error"), { status: res.status, data: err });
   }
-  return utf8;
+  return res.json();
 }
 
-function sanitizeText(t) { return t.replace(/[^\x20-\x7E\t\n\r]/g, ""); }
-
-// ─── LOGO ─────────────────────────────────────────────────────────────────────
-function SitiLogo({ size = 32 }) {
+// ── Small Components ──────────────────────────────────────────────────────────
+function Badge({ label, color }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 34 34" fill="none">
-      <path d="M 24 7 C 30 7, 30 15, 17 17 C 4 19, 4 27, 10 27" stroke={C.gold} strokeWidth="2.5" strokeLinecap="round" fill="none" />
-      <circle cx="24" cy="7" r="2.6" fill={C.gold} />
-      <circle cx="10" cy="27" r="2.6" fill={C.gold} opacity="0.65" />
-    </svg>
+    <span style={{
+      background: color + "20", color, border: `1px solid ${color}40`,
+      borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 600
+    }}>{label}</span>
   );
 }
 
-// ─── CALIBRATION OVERLAY ─────────────────────────────────────────────────────
-function CalibrationOverlay() {
+function StatCard({ label, value, sub, color = C.accentLt, loading = false }) {
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column" }}>
-      <SitiLogo size={52} />
-      <div style={{ color: C.gold, fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 20, letterSpacing: "0.28em", marginTop: 20 }}>MIMI INTELLIGENCE</div>
-      <div style={{ color: C.gold, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, letterSpacing: "0.16em", marginTop: 8, opacity: 0.8 }}>RE-CALIBRATING STATE OBSERVER...</div>
-      <div style={{ width: 320, height: 2, background: "#1A1A1A", margin: "16px auto 0", borderRadius: 1, overflow: "hidden" }}>
-        <div style={{ height: "100%", background: C.gold, animation: "calibBar 2.5s ease-in-out forwards" }} />
+    <div style={{
+      background: C.card, border: `1px solid ${C.border}`, borderRadius: 14,
+      padding: "20px 22px", position: "relative", overflow: "hidden"
+    }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: color }} />
+      <div style={{ color: C.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 10 }}>{label}</div>
+      <div style={{ fontSize: 30, fontWeight: 700, fontFamily: "JetBrains Mono, monospace", color: loading ? C.dim : C.text, lineHeight: 1 }}>
+        {loading ? "···" : value}
       </div>
-      <style>{`@keyframes calibBar{0%{width:0}100%{width:100%}}`}</style>
+      {sub && <div style={{ color, fontSize: 12, marginTop: 6, fontWeight: 500 }}>{sub}</div>}
     </div>
   );
 }
 
-// ─── PAYMENT MODAL ────────────────────────────────────────────────────────────
-function PaymentModal({ onClose }) {
-  const plans = [
-    { name: "PILOT", price: "₹29,999/mo", desc: "1 hub, 50K shipments/mo, email support", color: C.blue },
-    { name: "OPERATOR", price: "₹74,999/mo", desc: "5 hubs, 500K shipments/mo, priority support", color: C.gold },
-    { name: "ENTERPRISE", price: "Custom", desc: "Unlimited hubs, SLA, dedicated onboarding", color: C.green },
-  ];
-
+// ── Hub Card ──────────────────────────────────────────────────────────────────
+function HubCard({ hub }) {
+  const rc = hub.risk === "critical" ? C.coral : hub.risk === "warning" ? C.amber : C.emerald;
+  const rhoPct = Math.min(hub.rho * 100, 100);
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#000000cc", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 32, maxWidth: 560, width: "100%", borderRadius: 4 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <div style={{ fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 16, color: C.gold, letterSpacing: "0.2em" }}>SITI INTELLIGENCE — PRICING</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: C.textDim, cursor: "pointer", fontSize: 18 }}>✕</button>
+    <div style={{
+      background: C.card, border: `1px solid ${rc}44`, borderRadius: 14, padding: "18px",
+      position: "relative", overflow: "hidden", transition: "border-color 0.3s"
+    }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: rc }} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 13, fontWeight: 700, color: C.text }}>
+          {hub.hub_id}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
-          {plans.map(p => (
-            <div key={p.name} style={{ border: `1px solid ${p.color}44`, padding: "14px 12px", background: C.panel }}>
-              <div style={{ fontSize: 9, color: p.color, fontWeight: 700, letterSpacing: "0.15em", marginBottom: 8 }}>{p.name}</div>
-              <div style={{ fontSize: 18, color: p.color, fontWeight: 900, fontFamily: "'Chivo',sans-serif", marginBottom: 6 }}>{p.price}</div>
-              <div style={{ fontSize: 8.5, color: C.textDim, lineHeight: 1.5 }}>{p.desc}</div>
-              <button
-                onClick={() => {
-                  alert("Redirecting to Razorpay Secure Gateway...");
-                }}
-                style={{ marginTop: 10, width: "100%", background: "none", border: `1px solid ${p.color}`, color: p.color, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", padding: "5px 0", cursor: "pointer" }}>
-                {p.name === "ENTERPRISE" ? "CONTACT US" : "BUY NOW →"}
-              </button>
-            </div>
-          ))}
-        </div>
-        <div style={{ fontSize: 8.5, color: C.textDim, lineHeight: 1.7, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-          <span style={{ color: C.green }}>✓</span> Razorpay secured · <span style={{ color: C.green }}>✓</span> Auto-provisioned API key on payment · <span style={{ color: C.green }}>✓</span> 7-day money-back guarantee
-        </div>
+        <Badge label={hub.risk.toUpperCase()} color={rc} />
       </div>
-    </div>
-  );
-}
-
-// ─── HUB CARD ─────────────────────────────────────────────────────────────────
-function HubCard({ hub, criticalRho = 0.85 }) {
-  const rho = hub?.rho ?? 0;
-  const isCollapse = rho >= 0.85;
-  const isCritical = rho > 0.75;
-  const statusColor = isCollapse ? C.red : isCritical ? C.yellow : C.green;
-  const k = hub?.kalman ?? {};
-
-  return (
-    <div style={{ background: C.surface, border: `1px solid ${isCollapse ? C.red : C.borderBright}`, padding: "14px 16px", transition: "border-color 0.3s" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: statusColor, boxShadow: `0 0 6px ${statusColor}` }} />
-          <div style={{ fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 12, color: C.gold, letterSpacing: "0.12em" }}>{hub?.name?.toUpperCase()}</div>
-        </div>
-        <div style={{ fontSize: 8, color: statusColor, border: `1px solid ${statusColor}44`, padding: "1px 6px" }}>
-          {isCollapse ? "CRITICAL" : isCritical ? "WARNING" : "NOMINAL"}
-        </div>
+      <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "JetBrains Mono, monospace", color: rc, marginBottom: 8 }}>
+        ρ = {hub.rho.toFixed(4)}
       </div>
-      <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 26, fontWeight: 700, color: isCollapse ? C.red : isCritical ? C.yellow : C.gold, marginBottom: 6 }}>
-        {rho.toFixed(4)}
+      <div style={{ height: 4, background: C.dim, borderRadius: 2, marginBottom: 10, overflow: "hidden", position: "relative" }}>
+        <div style={{ width: `${rhoPct}%`, height: "100%", background: rc, transition: "width 0.5s" }} />
+        <div style={{ position: "absolute", left: "85%", top: 0, bottom: 0, width: 1, background: C.coral }} />
       </div>
-      <div style={{ height: 4, background: C.border, marginBottom: 10, position: "relative" }}>
-        <div style={{ height: "100%", width: `${Math.min(rho * 100, 100)}%`, background: statusColor, transition: "width 0.5s" }} />
-        <div style={{ position: "absolute", left: "85%", top: -2, bottom: -2, width: 1, background: `${C.red}88` }} />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         {[
-          { label: "T+1 45m", val: k.rho_t1?.toFixed(4), color: (k.rho_t1 ?? 0) >= 0.85 ? C.red : C.green },
-          { label: "T+3 135m", val: k.rho_t3?.toFixed(4), color: (k.rho_t3 ?? 0) >= 0.85 ? C.red : C.green },
-          { label: "λ eff", val: `${hub?.effective_lambda?.toFixed(1)}/hr`, color: C.blue },
-        ].map(item => (
-          <div key={item.label} style={{ background: C.panel, padding: "4px 6px", border: `1px solid ${C.border}` }}>
-            <div style={{ fontSize: 7, color: C.textDim }}>{item.label}</div>
-            <div style={{ fontSize: 11, color: item.color, fontWeight: 700 }}>{item.val ?? "—"}</div>
+          { k: "λ arrival",   v: `${hub.lambda.toFixed(2)}/hr`,  c: C.accentLt },
+          { k: "μ capacity",  v: `${hub.mu.toFixed(2)}/hr`,      c: C.emerald },
+          { k: "Shipments",   v: hub.shipments?.toLocaleString(), c: C.text },
+          { k: "IRP Score",   v: `${hub.irp_score?.toFixed(2)}/10`, c: hub.irp_score > 7 ? C.coral : C.amber },
+        ].map((s, i) => (
+          <div key={i} style={{ background: C.surface, borderRadius: 8, padding: "8px 10px" }}>
+            <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 3 }}>{s.k}</div>
+            <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 14, fontWeight: 600, color: s.c }}>{s.v || "—"}</div>
           </div>
         ))}
       </div>
-      {hub?.cascade_risk && (
-        <div style={{ marginTop: 8, fontSize: 8, color: C.yellow, border: `1px dashed ${C.yellow}66`, padding: "3px 6px", fontWeight: 700 }}>
-          ⚠ CASCADE RISK — RECEIVING DIVERTED TRAFFIC
+      {hub.kalman_t3 != null && (
+        <div style={{ marginTop: 10, padding: "8px 10px", background: C.surface, borderRadius: 8 }}>
+          <div style={{ color: C.muted, fontSize: 10, marginBottom: 2 }}>KALMAN T+3 FORECAST</div>
+          <div style={{
+            fontFamily: "JetBrains Mono, monospace", fontSize: 14, fontWeight: 700,
+            color: hub.kalman_t3 >= 0.85 ? C.coral : hub.kalman_t3 > 0.70 ? C.amber : C.emerald
+          }}>
+            ρ = {hub.kalman_t3.toFixed(4)}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-// ─── MIMI MATH PANEL ──────────────────────────────────────────────────────────
-function MimiPanel({ kState }) {
-  const rho = kState?.global_rho ?? 0;
-  const phi = kState?.phi ?? 0;
-  const wq = kState?.wq ?? 0;
-  const k = kState?.kalman ?? {};
-  const irp = kState?.inverse_reliability ?? {};
-  const isCollapse = rho >= 0.85;
-
-  const formulas = [
-    { title: "ρ = λ/μ", val: rho.toFixed(4), color: isCollapse ? C.red : C.gold, desc: `${kState?.total_lambda?.toFixed(1)}/hr ÷ ${((kState?.mu??150)*3)} = ${rho.toFixed(4)}` },
-    { title: "Φ(ρ) sigmoidal", val: phi.toFixed(4), color: phi > 0.5 ? C.red : C.green, desc: `1/(1+e^{-20(ρ-0.85)}) = ${phi.toFixed(4)}` },
-    { title: "T+3 Kalman", val: k.rho_t3?.toFixed(4) ?? "—", color: (k.rho_t3??0) >= 0.85 ? C.red : C.green, desc: "135-min forecast via 2D state vector" },
-    { title: "W_q M/M/1", val: Math.min(wq, 99.9).toFixed(3), color: wq > 4 ? C.red : C.blue, desc: `ρ/(1-ρ) queue depth` },
-    { title: "IRP Leakage", val: `$${irp.leakage_total?.toFixed(0) ?? 0}`, color: "#FF9F0A", desc: `${irp.failure_count ?? 0} hi-imp fails × $3.94` },
-    { title: "ρ_critical", val: kState?.critical_rho?.toFixed(4) ?? "0.85", color: "#FF9F0A", desc: "LR-computed threshold" },
-  ];
-
+// ── Donut Chart ───────────────────────────────────────────────────────────────
+function PieChart({ data, colors, labels, title, subtitle }) {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    loadChartJS().then((Chart) => {
+      if (chartRef.current) chartRef.current.destroy();
+      if (!ref.current) return;
+      chartRef.current = new Chart(ref.current, {
+        type: "doughnut",
+        data: { labels, datasets: [{ data, backgroundColor: colors.map(c => c + "cc"), borderColor: colors, borderWidth: 2, hoverOffset: 6 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: "68%",
+          plugins: {
+            legend: { display: false },
+            tooltip: { backgroundColor: C.card, borderColor: C.borderHi, borderWidth: 1, titleColor: C.text, bodyColor: C.muted, padding: 12 },
+          },
+        },
+      });
+    });
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [JSON.stringify(data)]);
   return (
-    <div style={{ background: C.surface, border: `1px solid ${isCollapse ? C.red : C.borderBright}` }}>
-      <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 9, color: C.gold, fontWeight: 700, letterSpacing: "0.12em" }}>MIMI KERNEL v2.0 — 2D KALMAN STATE OBSERVER</div>
-        <div style={{ fontSize: 8, color: isCollapse ? C.red : C.green, border: `1px solid ${isCollapse ? C.redDim : C.greenDim}`, padding: "1px 8px", fontWeight: 700 }}>
-          {isCollapse ? "COLLAPSE ρ≥0.85" : "KERNEL ACTIVE"}
-        </div>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 0 }}>
-        {formulas.map((f, i) => (
-          <div key={f.title} style={{ padding: "12px 14px", borderRight: i % 3 < 2 ? `1px solid ${C.border}` : "none", borderBottom: i < 3 ? `1px solid ${C.border}` : "none" }}>
-            <div style={{ fontSize: 8, color: C.textDim, letterSpacing: "0.1em", marginBottom: 6 }}>{f.title}</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: f.color, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1 }}>{f.val}</div>
-            <div style={{ fontSize: 8, color: C.textMuted, marginTop: 4 }}>{f.desc}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{ padding: "8px 12px", borderTop: `1px solid ${C.border}` }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 8, color: C.textDim, marginBottom: 4 }}>
-          <span>ρ=0</span><span style={{ color: "#FF9F0A" }}>DIVERSION 0.80</span><span style={{ color: C.red }}>COLLAPSE 0.85</span><span>ρ=1</span>
-        </div>
-        <div style={{ height: 6, background: C.border, position: "relative" }}>
-          <div style={{ height: "100%", width: `${Math.min(rho * 100, 100)}%`, background: isCollapse ? C.red : rho > 0.80 ? "#FF9F0A" : C.gold, transition: "width 0.5s" }} />
-          <div style={{ position: "absolute", left: "80%", top: 0, bottom: 0, width: 1, background: "#FF9F0A88" }} />
-          <div style={{ position: "absolute", left: "85%", top: 0, bottom: 0, width: 1, background: `${C.red}88` }} />
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px" }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4 }}>{title}</div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>{subtitle}</div>
+      <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
+        <div style={{ width: 140, height: 140, flexShrink: 0 }}><canvas ref={ref} /></div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
+          {labels.map((l, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: colors[i], flexShrink: 0 }} />
+              <div style={{ flex: 1, fontSize: 12, color: C.muted }}>{l}</div>
+              <div style={{ fontFamily: "monospace", fontSize: 12, color: C.text, fontWeight: 500 }}>{data[i]?.toLocaleString()}</div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
   );
 }
 
-// ─── CHARTS ───────────────────────────────────────────────────────────────────
-function ChartTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{ background: "#111", border: `1px solid ${C.borderBright}`, padding: "8px 12px", fontSize: 10 }}>
-      <div style={{ color: C.gold, fontWeight: 700, marginBottom: 4 }}>{label}</div>
-      {payload.map((p, i) => (
-        <div key={i} style={{ color: p.color ?? C.text }}>{p.name}: {typeof p.value === "number" ? p.value.toFixed(4) : p.value}</div>
-      ))}
-    </div>
-  );
-}
-
-function HubCharts({ kState }) {
-  const hubs = kState?.hubs ?? [];
-  const delay = kState?.average_delay ?? [];
-  const rzImportance = kState?.red_zone_importance ?? [];
-  const rhoHistory = kState?.rho_history ?? [];
-  const PIE_COLORS = [C.red, "#FF9F0A", C.blue];
-  const HUB_COLORS = { "Mumbai BOM": "#FF3B30", "Delhi IGI": "#FF9F0A", "Bengaluru": "#FFB340", "Chennai MAA": C.blue, "Hyderabad": C.green };
-
-  const hubCompare = hubs.map(h => ({
-    name: h.name?.split(" ")[0],
-    rho: h.rho,
-    rho_t1: h.kalman?.rho_t1 ?? 0,
-    rho_t3: h.kalman?.rho_t3 ?? 0,
-  }));
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* Hub comparison bar */}
-      <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
-        <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 10 }}>HUB UTILIZATION COMPARISON · ρ = λ/μ</div>
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={hubCompare} barGap={4}>
-            <CartesianGrid vertical={false} stroke={C.border} />
-            <XAxis dataKey="name" tick={{ fill: C.textDim, fontSize: 9 }} axisLine={false} />
-            <YAxis domain={[0, 1.0]} tick={{ fill: C.textDim, fontSize: 9 }} axisLine={false} />
-            <Tooltip content={<ChartTooltip />} />
-            <ReferenceLine y={0.85} stroke={C.red} strokeDasharray="4 4" label={{ value: "ρ_c=0.85", fill: C.red, fontSize: 8 }} />
-            <Bar dataKey="rho" name="ρ current" fill={C.gold} radius={[2,2,0,0]} />
-            <Bar dataKey="rho_t1" name="T+1" fill={C.blue} radius={[2,2,0,0]} />
-            <Bar dataKey="rho_t3" name="T+3" fill="#FF9F0A" radius={[2,2,0,0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Rho history area chart */}
-      <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
-        <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 10 }}>NETWORK ρ TRAJECTORY · LIVE KALMAN STREAM</div>
-        <ResponsiveContainer width="100%" height={180}>
-          <AreaChart data={rhoHistory}>
-            <defs>
-              <linearGradient id="rhoGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={C.gold} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={C.gold} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
-            <XAxis dataKey="time" tick={{ fill: C.textDim, fontSize: 7 }} axisLine={false} />
-            <YAxis domain={[0, 1.1]} tick={{ fill: C.textDim, fontSize: 8 }} axisLine={false} />
-            <Tooltip content={<ChartTooltip />} />
-            <ReferenceLine y={0.85} stroke={C.red} strokeDasharray="4 4" />
-            <Area type="monotone" dataKey="rho" name="ρ" stroke={C.gold} strokeWidth={2} fill="url(#rhoGrad)" dot={false} />
-            <Line type="monotone" dataKey="t3" name="T+3" stroke={C.neonGreen} strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Delay + Importance */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
-          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 8 }}>AVG DELAY BY WAREHOUSE BLOCK</div>
-          <ResponsiveContainer width="100%" height={160}>
-            <BarChart data={delay}>
-              <CartesianGrid vertical={false} stroke={C.border} />
-              <XAxis dataKey="block" tick={{ fill: C.textDim, fontSize: 9 }} axisLine={false} />
-              <YAxis tick={{ fill: C.textDim, fontSize: 8 }} axisLine={false} />
-              <Tooltip content={<ChartTooltip />} />
-              <Bar dataKey="avg_delay" name="Avg Delay (hrs)" fill={C.gold} radius={[2,2,0,0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-        <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
-          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 8 }}>RED-ZONE FAILURE BY IMPORTANCE</div>
-          <ResponsiveContainer width="100%" height={160}>
-            <PieChart>
-              <Pie data={rzImportance} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={60} innerRadius={30}>
-                {rzImportance.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-              </Pie>
-              <Tooltip content={<ChartTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 9, color: C.textDim }} />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── IRP TABLE ────────────────────────────────────────────────────────────────
-// ─── IRPTable: USES REAL BACKEND DATA (P1-5 fix) ─────────────────────────────
-// Replace the IRPTable function in App.js with this version.
-// The backend now returns inverse_reliability_per_hub with real hi/lo fail rates.
-
-function IRPTable({ kState }) {
-  const perHub = kState?.inverse_reliability_per_hub ?? [];
-  if (perHub.length === 0) {
-    // Fallback: derive from global IRP if per-hub not ready yet
-    return (
-      <div style={{ background: "#0A0A0A", border: "1px solid #1F1F1F", padding: "14px 16px" }}>
-        <div style={{ fontSize: 9, color: "#D4D4D8", letterSpacing: "0.12em", marginBottom: 8 }}>
-          INVERSE RELIABILITY PARADOX — LOADING...
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div style={{ background: "#0A0A0A", border: "1px solid #1F1F1F" }}>
-      <div style={{ padding: "8px 12px", borderBottom: "1px solid #1A1A1A", display: "flex", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 8.5, color: "#D4D4D8", letterSpacing: "0.1em" }}>INVERSE RELIABILITY PARADOX — PER HUB (REAL DATA)</div>
-        <div style={{ fontSize: 8, color: "#FFD60A", border: "1px solid #FFD60A44", padding: "1px 6px" }}>IRP CONFIRMED</div>
-      </div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 8.5, fontFamily: "'JetBrains Mono',monospace" }}>
-        <thead>
-          <tr>{["HUB", "ρ", "HI-IMP FAIL%", "LO-IMP FAIL%", "IRP GAP", "₹ IMPACT/YR"].map(h => (
-            <th key={h} style={{ padding: "6px 10px", textAlign: h === "HUB" ? "left" : "right", color: "#555", fontWeight: 400, fontSize: 7.5, borderBottom: "1px solid #1A1A1A" }}>{h}</th>
-          ))}</tr>
-        </thead>
-        <tbody>
-          {perHub.map(row => {
-            const rho = row.rho ?? 0;
-            const hiRate = ((row.hi_fail_rate ?? 0) * 100).toFixed(2);
-            const loRate = ((row.lo_fail_rate ?? 0) * 100).toFixed(2);
-            const gap = ((row.irp_gap ?? 0) * 100).toFixed(1);
-            const impact = (row.annual_impact_cr ?? 0).toFixed(2);
-            return (
-              <tr key={row.hub} style={{ borderBottom: "1px solid #141414" }}>
-                <td style={{ padding: "7px 10px", color: "#FFB340", fontWeight: 700 }}>{row.hub}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: rho >= 0.85 ? "#FF3B30" : "#D4D4D8" }}>{rho.toFixed(4)}</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: "#FF3B30" }}>{hiRate}%</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: "#64D2FF" }}>{loRate}%</td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: "#FFD60A", fontWeight: 700 }}>
-                  {parseFloat(gap) > 0 ? "+" : ""}{gap}pp
-                </td>
-                <td style={{ padding: "7px 10px", textAlign: "right", color: "#32D74B" }}>₹{impact}Cr</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <div style={{ padding: "6px 12px", borderTop: "1px solid #141414", fontSize: 7.5, color: "#555" }}>
-        Source: Safexpress Case #02028317 · Leakage: $1.20 recovery + $2.74 CLV = $3.94/unit
-      </div>
-    </div>
-  );
-}
-/*
-  const ghostRef = useRef(null);
-  const ghostCountRef = useRef(0);
-  const isGhostModeRef = useRef(false);
-
-  const stopGhost = () => {
-    isGhostModeRef.current = false;
-    if (ghostRef.current) clearTimeout(ghostRef.current);
-    setIsGhostMode(false);
-    ghostCountRef.current = 0;
-  };
-
-  const startGhost = () => {
-    setIsGhostMode(true);
-    isGhostModeRef.current = true;
-    ghostCountRef.current = 0;
-
-    const triggerGhost = async () => {
-      if (!isGhostModeRef.current) return;
-      try {
-        await axios.post(`${API}/kernel/stream-batch?n=50`);
-        await onRefresh();
-      } catch (e) {
-        console.warn("Ghost tick failed:", e.message);
-      }
-      ghostCountRef.current++;
-      if (ghostCountRef.current >= 90) {
-        stopGhost();
-        return;
-      }
-      if (isGhostModeRef.current) {
-        ghostRef.current = setTimeout(triggerGhost, 1000);
-      }
-    };
-
-    triggerGhost();
-  };
-*/
-
-// ─── LIVE API STREAM PANEL ────────────────────────────────────────────────────
-function LiveAPIPanel({ apiBase }) {
-  const [events, setEvents] = useState([]);
-  const [connected, setConnected] = useState(false);
-  const [apiKey, setApiKey] = useState("siti-admin-key-001");
-  const [sseActive, setSseActive] = useState(false);
-  const eventSourceRef = useRef(null);
-  const logRef = useRef(null);
-
-  const startSSE = useCallback(() => {
-    if (eventSourceRef.current) return;
-    const url = `${apiBase}/api/v1/stream?key=${apiKey}`;
-    try {
-      const es = new EventSource(url);
-      es.onopen = () => { setConnected(true); setSseActive(true); };
-      es.onmessage = (e) => {
-        const data = JSON.parse(e.data);
-        setEvents(prev => [...prev.slice(-49), { ...data, ts: new Date().toLocaleTimeString("en-IN") }]);
-      };
-      es.onerror = () => { es.close(); setConnected(false); setSseActive(false); eventSourceRef.current = null; };
-      eventSourceRef.current = es;
-    } catch (err) {
-      console.error("SSE failed:", err);
-    }
-  }, [apiBase, apiKey]);
-
-  const stopSSE = useCallback(() => {
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
-    setConnected(false);
-    setSseActive(false);
-  }, []);
-
-  useEffect(() => { return () => eventSourceRef.current?.close(); }, []);
-
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [events]);
-
-  return (
-    <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: "14px 16px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", fontWeight: 700 }}>LIVE API STREAM — COMPANY INTEGRATION</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: connected ? C.green : C.red }} />
-          <div style={{ fontSize: 8, color: connected ? C.green : C.red }}>{connected ? "STREAMING" : "OFFLINE"}</div>
-        </div>
-      </div>
-      <div style={{ fontSize: 8, color: C.textDim, marginBottom: 10, lineHeight: 1.6 }}>
-        When a company puts their API key here and clicks CONNECT, their real shipment data flows live into the MIMI Kernel. Every intercept call updates the dashboard in real-time.
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
-        <input
-          value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
-          placeholder="Your API key..."
-          style={{ flex: 1, background: C.panel, border: `1px solid ${C.borderBright}`, color: C.text, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, padding: "5px 10px", outline: "none" }}
-        />
-        <button onClick={sseActive ? stopSSE : startSSE} style={{
-          background: sseActive ? "#001A05" : C.panel,
-          border: `1px solid ${sseActive ? C.green : C.borderBright}`,
-          color: sseActive ? C.green : C.textDim,
-          fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", padding: "5px 14px", cursor: "pointer"
-        }}>
-          {sseActive ? "DISCONNECT" : "CONNECT LIVE"}
-        </button>
-      </div>
-
-      {/* API Endpoint reference */}
-      <div style={{ background: C.panel, border: `1px solid ${C.border}`, padding: "10px 12px", marginBottom: 10, fontSize: 8.5, fontFamily: "'JetBrains Mono',monospace" }}>
-        <div style={{ color: C.blue, marginBottom: 4 }}>POST {apiBase}/api/v1/intercept</div>
-        <div style={{ color: C.textDim }}>{`{"shipments":[{"id":"SHP-001","warehouse_block":"A","cost":245,"product_importance":"High"}],"config":{"mu":150}}`}</div>
-        <div style={{ marginTop: 6, color: C.green }}>→ {"{"}"status":"nominal|critical|collapse","recommended_action":"NOMINAL|MONITOR|DIVERT"{"}"}</div>
-      </div>
-
-      {/* Live event log */}
-      <div ref={logRef} style={{ height: 120, overflowY: "auto", background: C.panel, border: `1px solid ${C.border}`, padding: "6px 10px" }}>
-        {events.length === 0 ? (
-          <div style={{ fontSize: 8, color: C.textMuted, fontFamily: "'JetBrains Mono',monospace" }}>Waiting for live stream... connect your API key above.</div>
-        ) : events.map((ev, i) => (
-          <div key={i} style={{ fontSize: 8, color: ev.status === "collapse" ? C.red : ev.status === "critical" ? C.yellow : C.green, fontFamily: "'JetBrains Mono',monospace", marginBottom: 2 }}>
-            [{ev.ts}] ρ={ev.global_rho?.toFixed(4)} · STATUS={ev.status?.toUpperCase()} · ACTION={ev.recommended_action}
-          </div>
-        ))}
-      </div>
-
-      <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-        {[
-          { label: "ENDPOINT", val: "/api/v1/intercept", color: C.blue },
-          { label: "AUTH", val: "Bearer Token", color: C.gold },
-          { label: "RATE LIMIT", val: "1000 req/min", color: C.green },
-        ].map(item => (
-          <div key={item.label} style={{ background: C.panel, border: `1px solid ${C.border}`, padding: "6px 8px" }}>
-            <div style={{ fontSize: 7, color: C.textDim }}>{item.label}</div>
-            <div style={{ fontSize: 9, color: item.color, fontWeight: 700 }}>{item.val}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── DATA INJECTION PANEL ─────────────────────────────────────────────────────
-function DataInjectionPanel({ onRefresh, kState, ticker, mu, setMu, isStreaming, setIsStreaming, isGhostMode, setIsGhostMode, onCalibrating }) {
+// ── CSV Upload Panel ──────────────────────────────────────────────────────────
+function CSVUploadPanel() {
+  const [drag, setDrag]       = useState(false);
+  const [file, setFile]       = useState(null);
+  const [status, setStatus]   = useState(null);
+  const [result, setResult]   = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState(null);
-  const [uploadError, setUploadError] = useState(null);
-  const fileRef = useRef(null);
-  const streamRef = useRef(null);
-  const ghostRef = useRef(null);
-  const ghostCountRef = useRef(0);
 
-  const doUpload = async (file) => {
-    onCalibrating(true);
-    setUploadMsg(null); setUploadError(null);
-    try {
-      const rawText = await readFileResilient(file);
-      const cleanText = sanitizeText(rawText);
-      const remapped = preprocessCSV(cleanText);
-      const blob = new Blob([remapped], { type: "text/csv" });
-      const processed = new File([blob], file.name, { type: "text/csv" });
-      const fd = new FormData();
-      fd.append("file", processed);
-      const [res] = await Promise.all([
-        axios.post(`${API}/kernel/upload`, fd, { headers: { "Content-Type": "multipart/form-data" } }),
-        new Promise(r => setTimeout(r, 2800)),
-      ]);
-      setUploadMsg(`GENIUS RESET COMPLETE — ${res.data.message}`);
-      await onRefresh();
-    } catch (err) {
-      const detail = err.response?.data?.detail;
-      setUploadError(typeof detail === "string" ? detail : "Upload failed — check CSV format");
-    } finally {
-      onCalibrating(false);
+  const handleFile = (f) => {
+    if (!f?.name?.toLowerCase().endsWith(".csv")) {
+      setStatus({ type: "error", msg: "Only .csv files are supported." });
+      return;
     }
+    setFile(f);
+    setStatus(null);
+    setResult(null);
   };
 
-  const handleUpload = async (e) => {
-    const file = e.target.files?.[0];
+  const handleUpload = async () => {
     if (!file) return;
     setUploading(true);
-    await doUpload(file);
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = "";
+    setStatus({ type: "loading", msg: "Running MIMI Kernel analysis..." });
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      // BUG-003 FIX: Backend now auto-maps Kaggle columns
+      const data = await apiCall("/api/kernel/reset", {
+        method: "POST",
+        headers: { "X-Tenant-ID": "default" },
+        body: form,
+      });
+      setStatus({
+        type: "success",
+        msg: `Analysis complete — ${data.summary?.total_rows?.toLocaleString()} rows, ${data.summary?.hub_count} hubs detected.`
+      });
+      setResult(data.summary);
+    } catch (e) {
+      setStatus({ type: "error", msg: e.message || "Upload failed." });
+    } finally {
+      setUploading(false);
+    }
   };
 
-  const startStream = () => {
-    setIsStreaming(true);
-    streamRef.current = setInterval(async () => {
-      await axios.post(`${API}/kernel/stream-batch?n=100`);
-      await onRefresh();
-    }, 10000);
+  const sc = status?.type === "success" ? C.emerald : status?.type === "error" ? C.coral : C.accentLt;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div
+        onDragOver={e => { e.preventDefault(); setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={e => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files[0]); }}
+        onClick={() => document.getElementById("csv-file-main").click()}
+        style={{
+          border: `2px dashed ${drag ? C.teal : file ? C.accent : C.border}`,
+          borderRadius: 14, padding: "40px 24px", textAlign: "center",
+          cursor: "pointer", background: drag ? C.teal + "08" : file ? C.accent + "08" : "transparent",
+          transition: "all 0.2s"
+        }}
+      >
+        <div style={{ fontSize: 36, marginBottom: 12 }}>📡</div>
+        {file ? (
+          <>
+            <div style={{ color: C.accentLt, fontSize: 15, fontWeight: 600 }}>{file.name}</div>
+            <div style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>{(file.size / 1024).toFixed(1)} KB — click to change</div>
+          </>
+        ) : (
+          <>
+            <div style={{ color: C.text, fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Drop your logistics dataset</div>
+            <div style={{ color: C.muted, fontSize: 13 }}>Kaggle e-commerce CSV, Delhivery, or any hub data — auto-mapped</div>
+          </>
+        )}
+        <input id="csv-file-main" type="file" accept=".csv" style={{ display: "none" }}
+          onChange={e => handleFile(e.target.files[0])} />
+      </div>
+
+      {status && (
+        <div style={{ padding: "10px 14px", borderRadius: 8, background: sc + "15", border: `1px solid ${sc}33`, color: sc, fontSize: 13 }}>
+          {status.msg}
+        </div>
+      )}
+
+      {file && (
+        <button onClick={handleUpload} disabled={uploading}
+          style={{
+            background: uploading ? C.dim : C.accent, border: "none", borderRadius: 10,
+            padding: "14px", color: "white", fontSize: 14, fontWeight: 600,
+            cursor: uploading ? "not-allowed" : "pointer", fontFamily: "inherit", transition: "all 0.2s"
+          }}>
+          {uploading ? "Processing Dataset..." : "Run Kernel Analysis →"}
+        </button>
+      )}
+
+      {result && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+          {[
+            { label: "Total Rows",      value: result.total_rows?.toLocaleString() || "—" },
+            { label: "Hubs Scanned",    value: result.hub_count || "—" },
+            { label: "Critical Hubs",   value: result.hubs?.filter(h => h.risk === "critical").length ?? 0 },
+          ].map((s, i) => (
+            <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px", textAlign: "center" }}>
+              <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>{s.label}</div>
+              <div style={{ color: C.text, fontSize: 22, fontWeight: 700, fontFamily: "JetBrains Mono, monospace" }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {result?.hubs?.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Hub Analysis Results</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+            {result.hubs.slice(0, 6).map((hub, i) => (
+              <HubCard key={i} hub={hub} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── API Key Card ──────────────────────────────────────────────────────────────
+function APIKeyCard({ apiKey }) {
+  const [revealed, setRevealed] = useState(false);
+  const [copied, setCopied]     = useState(false);
+  const copy = () => { navigator.clipboard.writeText(apiKey); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Your API Key</div>
+        <Badge label="Active" color={C.emerald} />
+      </div>
+      <div style={{
+        background: C.surface, border: `1px solid ${C.borderHi}`, borderRadius: 8,
+        padding: "12px 14px", fontFamily: "JetBrains Mono, monospace", fontSize: 13,
+        color: revealed ? C.accentLt : C.muted, letterSpacing: revealed ? "0.5px" : "4px", userSelect: revealed ? "text" : "none"
+      }}>
+        {revealed ? apiKey : "●".repeat(32)}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={() => setRevealed(r => !r)}
+          style={{ flex: 1, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+          {revealed ? "Hide Key" : "Reveal Key"}
+        </button>
+        <button onClick={copy}
+          style={{ flex: 1, background: copied ? C.emerald + "20" : C.accent + "20", border: `1px solid ${copied ? C.emerald : C.accent}50`, borderRadius: 8, padding: "9px", color: copied ? C.emerald : C.accentLt, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+          {copied ? "Copied!" : "Copy"}
+        </button>
+      </div>
+      <div style={{ marginTop: 14, padding: "12px 14px", background: C.surface, borderRadius: 8 }}>
+        <div style={{ color: C.muted, fontSize: 11, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Usage</div>
+        <pre style={{ margin: 0, fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: C.accentLt, whiteSpace: "pre-wrap" }}>
+{`fetch("${API_BASE}/api/hubs", {
+  headers: { "X-API-Key": "${revealed ? apiKey : "YOUR_KEY"}" }
+})`}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+// ── Pricing Card ──────────────────────────────────────────────────────────────
+function PricingCard({ plan, onBuy }) {
+  return (
+    <div
+      style={{
+        background: plan.recommended ? C.card : C.surface,
+        border: `1.5px solid ${plan.recommended ? plan.color : C.border}`,
+        borderRadius: 18, padding: "28px 24px", position: "relative", overflow: "hidden",
+        boxShadow: plan.recommended ? `0 0 40px ${plan.color}20` : "none",
+        transition: "transform 0.2s, box-shadow 0.2s"
+      }}
+      onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.boxShadow = `0 12px 48px ${plan.color}25`; }}
+      onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = plan.recommended ? `0 0 40px ${plan.color}20` : "none"; }}
+    >
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: plan.color }} />
+      {plan.recommended && (
+        <div style={{ position: "absolute", top: 16, right: 16, background: plan.color + "25", color: plan.color, border: `1px solid ${plan.color}50`, borderRadius: 20, padding: "3px 10px", fontSize: 10, fontWeight: 700, letterSpacing: "0.5px" }}>
+          RECOMMENDED
+        </div>
+      )}
+      <div style={{ color: plan.color, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6 }}>{plan.name}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 4 }}>
+        <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 32, fontWeight: 700, color: C.text }}>{plan.priceLabel}</span>
+        <span style={{ color: C.muted, fontSize: 13 }}>{plan.period}</span>
+      </div>
+      <div style={{ color: C.muted, fontSize: 12, marginBottom: 16, fontStyle: "italic" }}>{plan.tagline}</div>
+      <div style={{ color: C.muted, fontSize: 12, marginBottom: 20, paddingBottom: 20, borderBottom: `1px solid ${C.border}` }}>
+        {plan.calls} · {plan.hubs} · {plan.sms}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+        {plan.features.map((f, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+            <span style={{ color: plan.color, fontSize: 13, marginTop: 1, flexShrink: 0 }}>✓</span>
+            <span style={{ color: C.muted, fontSize: 13, lineHeight: 1.5 }}>{f}</span>
+          </div>
+        ))}
+      </div>
+      <button onClick={() => onBuy(plan)}
+        style={{
+          width: "100%", background: plan.recommended ? plan.color : "transparent",
+          border: `1.5px solid ${plan.color}`, borderRadius: 10, padding: "13px",
+          color: plan.recommended ? "white" : plan.color, fontSize: 14, fontWeight: 600,
+          cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s"
+        }}
+        onMouseEnter={e => { if (!plan.recommended) e.currentTarget.style.background = plan.color + "20"; }}
+        onMouseLeave={e => { if (!plan.recommended) e.currentTarget.style.background = "transparent"; }}>
+        {plan.cta}
+      </button>
+    </div>
+  );
+}
+
+// ── Contact Section ───────────────────────────────────────────────────────────
+function ContactSection() {
+  const [name, setName]       = useState("");
+  const [company, setCompany] = useState("");
+  const [message, setMessage] = useState("");
+
+  const sendToWhatsApp = () => {
+    const msg = encodeURIComponent(
+      `Hi! I'm ${name || "a logistics professional"} from ${company || "a logistics company"}.\n\n${message || "I'd like to know more about SITI Intelligence."}\n\n— via SITI Intelligence website`
+    );
+    window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
   };
-  const stopStream = () => { clearInterval(streamRef.current); setIsStreaming(false); };
 
-  const startGhost = () => {
-    setIsGhostMode(true);
-    ghostCountRef.current = 0;
-    ghostRef.current = setInterval(async () => {
-      await axios.post(`${API}/kernel/stream-batch?n=50`);
-      await onRefresh();
-      ghostCountRef.current++;
-      if (ghostCountRef.current >= 90) stopGhost();
-    }, 1000);
-  };
-  const stopGhost = () => { clearInterval(ghostRef.current); setIsGhostMode(false); ghostCountRef.current = 0; };
-
-  const handleMuChange = async (val) => {
-    setMu(val);
-    try { await axios.post(`${API}/kernel/set-mu`, { mu: val }); await onRefresh(); } catch {}
-  };
-
-  const exportPDF = () => {
-    const doc = new jsPDF({ orientation: "portrait", format: "a4" });
-    const now = new Date().toISOString();
-    const rho = kState?.rho ?? 0;
-    const phi = kState?.phi ?? 0;
-    const irp = kState?.inverse_reliability ?? {};
-
-    doc.setFillColor(5, 5, 5);
-    doc.rect(0, 0, 210, 45, "F");
-    doc.setFillColor(255, 179, 64);
-    doc.rect(0, 0, 5, 45, "F");
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(255, 179, 64);
-    doc.setFontSize(18);
-    doc.text("SITI INTELLIGENCE", 12, 14);
-    doc.setFontSize(9);
-    doc.setTextColor(200, 200, 200);
-    doc.text("FORENSIC STATE AUDIT [Case #02028317]", 12, 22);
-    doc.text(`GENERATED: ${now}`, 12, 30);
-    doc.text(`DATASET: ${kState?.dataset_name ?? "SAFEXPRESS_CASE_02028317"}`, 12, 37);
-    doc.setTextColor(255, 59, 48);
-    doc.text(rho >= 0.85 ? "STATUS: UTILIZATION COLLAPSE — SIGMOIDAL DECAY TRIGGERED" : rho > 0.80 ? "STATUS: PREEMPTIVE DIVERSION PROTOCOL INITIATED" : "STATUS: NOMINAL OPERATIONS", 12, 43);
-
-    doc.setTextColor(255, 179, 64);
-    doc.setFontSize(11);
-    doc.setFont("helvetica", "bold");
-    doc.text("EXECUTIVE SUMMARY", 14, 58);
-    autoTable(doc, {
-      startY: 62,
-      head: [["METRIC", "VALUE", "STATUS"]],
-      body: [
-        ["Hub Utilization (ρ)", rho.toFixed(4), rho > 0.80 ? "CRITICAL" : "NOMINAL"],
-        ["Instability Φ(ρ)", phi.toFixed(4), phi < 0.2 ? "CRITICAL" : "STABLE"],
-        ["Annualized Exposure", "$2,810,000", "AUDIT BASELINE"],
-        ["Revenue Saved", `$${ticker?.revenue_saved?.toFixed(2) ?? "0.00"}`, "RECOVERED"],
-        ["High-Imp Failures", irp.failure_count ?? 0, "IRP CONFIRMED"],
-        ["Total Leakage", `$${irp.leakage_total?.toFixed(2) ?? "0.00"}`, "TRACKED"],
-      ],
-      theme: "grid",
-      headStyles: { fillColor: [10,10,10], textColor: [255,179,64], fontSize: 8, fontStyle: "bold" },
-      bodyStyles: { fillColor: [15,15,15], textColor: [220,220,220], fontSize: 8 },
-    });
-    doc.save(`siti-forensic-audit-${Date.now()}.pdf`);
+  const inputStyle = {
+    width: "100%", background: C.surface, border: `1px solid ${C.border}`,
+    borderRadius: 8, padding: "10px 14px", color: C.text, fontSize: 13,
+    fontFamily: "inherit", outline: "none", boxSizing: "border-box"
   };
 
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: "14px 16px" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-        {/* Col 1: CSV Upload */}
-        <div>
-          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.15em", marginBottom: 8, fontWeight: 700 }}>DATA INJECTION — GENIUS RESET</div>
-          <div style={{ fontSize: 8.5, color: C.textDim, marginBottom: 10, lineHeight: 1.6 }}>
-            Upload your logistics CSV. MIMI Kernel wipes history, runs logistic regression, recalculates ρ_critical. Auto-maps messy headers.
-          </div>
-          <input ref={fileRef} type="file" accept=".csv" onChange={handleUpload} style={{ display: "none" }} id="siti-csv-upload" />
-          <label htmlFor="siti-csv-upload" style={{
-            display: "inline-block", background: uploading ? "#1A1A00" : "#1A0A00", border: `1px solid ${uploading ? C.gold : "#FF9F0A"}`,
-            color: uploading ? C.gold : "#FF9F0A", fontFamily: "'JetBrains Mono',monospace", fontSize: 10, fontWeight: 700,
-            letterSpacing: "0.12em", padding: "7px 16px", cursor: uploading ? "wait" : "pointer", userSelect: "none"
-          }}>
-            {uploading ? "PROCESSING..." : "⬆ UPLOAD CSV — GENIUS RESET"}
-          </label>
-          <div style={{ marginTop: 8, fontSize: 7.5, color: C.textDim, lineHeight: 1.8 }}>
-            {["delay_status → Reached.on.Time_Y.N","wt → Weight_in_gms","block → Warehouse_block","priority → Product_importance"].map(m => (
-              <div key={m}><span style={{ color: C.green }}>›</span> {m}</div>
-            ))}
-          </div>
-          {uploadMsg && <div style={{ marginTop: 8, padding: "6px 10px", background: "#001A00", border: `1px solid ${C.green}`, color: C.green, fontSize: 8.5 }}>{uploadMsg}</div>}
-          {uploadError && <div style={{ marginTop: 8, padding: "6px 10px", background: "#1A0000", border: `1px solid ${C.red}`, color: C.red, fontSize: 8.5 }}>ERROR: {uploadError}</div>}
-        </div>
-
-        {/* Col 2: PDF Export */}
-        <div>
-          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.15em", marginBottom: 8, fontWeight: 700 }}>FORENSIC AUDIT EXPORT</div>
-          <div style={{ fontSize: 8.5, color: C.textDim, marginBottom: 10, lineHeight: 1.6 }}>
-            Board-ready PDF: Forensic State Audit — MIMI Kernel analysis, IRP findings, Mission LiFE ESG certification.
-          </div>
-          <button onClick={exportPDF} style={{
-            background: "#000D1A", border: `1px solid ${C.blue}`, color: C.blue, fontFamily: "'JetBrains Mono',monospace",
-            fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", padding: "7px 16px", cursor: "pointer"
-          }}>
-            📄 EXPORT FORENSIC AUDIT PDF
-          </button>
-          <div style={{ marginTop: 10, padding: 8, background: C.panel, border: `1px solid ${C.border}`, fontSize: 8, color: C.textDim, lineHeight: 1.8 }}>
-            {["Executive KPI Summary", "MIMI Kernel Formulation", "IRP Table (Top 15 failures)", "Kalman Filter State Analysis", "Mission LiFE ESG Tag"].map(item => (
-              <div key={item}><span style={{ color: C.green }}>✓</span> {item}</div>
-            ))}
-          </div>
-        </div>
-
-        {/* Col 3: μ Control + Streams */}
-        <div>
-          <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.15em", marginBottom: 8, fontWeight: 700 }}>SERVICE CAPACITY (μ) CONTROL</div>
-          <div style={{ fontSize: 8.5, color: C.textDim, marginBottom: 10, lineHeight: 1.6 }}>Adjust μ per hub. ρ = λ/μ recalculates instantly across all 5 hubs.</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-            <input type="range" min={50} max={500} step={5} value={mu} onChange={e => handleMuChange(Number(e.target.value))}
-              style={{ flex: 1, accentColor: C.green, cursor: "pointer" }} />
-            <div style={{ background: C.panel, border: `1px solid ${C.green}`, padding: "4px 10px", fontFamily: "'JetBrains Mono',monospace", fontSize: 13, color: C.green, minWidth: 80, textAlign: "center" }}>
-              μ={mu}
+    <div style={{ maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ textAlign: "center" }}>
+        <h2 style={{ fontSize: 28, fontWeight: 800, margin: "0 0 8px" }}>Get in Touch</h2>
+        <p style={{ color: C.muted, fontSize: 14, margin: 0 }}>Response within 2 hours on WhatsApp.</p>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, flexWrap: "wrap" }}>
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "24px", display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Send a message</div>
+          {[
+            { label: "Your Name",   val: name,    set: setName,    ph: "Priya Sharma" },
+            { label: "Company",     val: company, set: setCompany, ph: "Safexpress / Gati / Your 3PL" },
+          ].map(({ label, val, set, ph }) => (
+            <div key={label}>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{label}</div>
+              <input value={val} onChange={e => set(e.target.value)} placeholder={ph} style={inputStyle} />
             </div>
+          ))}
+          <div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Message</div>
+            <textarea value={message} onChange={e => setMessage(e.target.value)}
+              placeholder="I want to run SITI on our shipment data..." rows={4}
+              style={{ ...inputStyle, resize: "vertical" }} />
           </div>
-          <div style={{ fontSize: 8, color: C.textDim, marginBottom: 12 }}>
-            Network capacity: <span style={{ color: C.green }}>{mu * 5} units/hr</span> across 5 hubs
-          </div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <button onClick={isStreaming ? stopStream : startStream} disabled={isGhostMode} style={{
-              flex: 1, background: isStreaming ? "#001A0A" : C.panel, border: `1px solid ${isStreaming ? C.green : C.borderBright}`,
-              color: isStreaming ? C.green : C.textDim, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700,
-              letterSpacing: "0.1em", padding: "6px 0", cursor: isGhostMode ? "not-allowed" : "pointer", opacity: isGhostMode ? 0.4 : 1
-            }}>
-              {isStreaming ? "● HALT STREAM" : "LIVE STREAM"}
-            </button>
-            <button onClick={isGhostMode ? stopGhost : startGhost} disabled={isStreaming} style={{
-              flex: 1, background: isGhostMode ? "#001A05" : C.panel, border: `1px solid ${isGhostMode ? C.neonGreen : C.borderBright}`,
-              color: isGhostMode ? C.neonGreen : C.textDim, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700,
-              letterSpacing: "0.1em", padding: "6px 0", cursor: isStreaming ? "not-allowed" : "pointer", opacity: isStreaming ? 0.4 : 1
-            }}>
-              {isGhostMode ? "● HALT GHOST" : "GHOST TRIGGER"}
-            </button>
-          </div>
-          <div style={{ fontSize: 7.5, color: C.textDim }}>Stream: 100 units/10s · Ghost: 50 units/s (90s auto-stop)</div>
+          <button onClick={sendToWhatsApp}
+            style={{ background: "#25D366", border: "none", borderRadius: 10, padding: "13px", color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            💬 Send via WhatsApp
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {[
+            { icon: "💬", title: "WhatsApp (Fastest)", desc: "Within 2 hours, 9AM–9PM IST", action: "Chat Now", color: "#25D366", href: `https://wa.me/${WA_NUMBER}?text=${WA_SUPPORT_MSG}` },
+            { icon: "📧", title: "Email", desc: "support@siti-intelligence.io — 24h", action: "Send Email", color: C.accentLt, href: "mailto:support@siti-intelligence.io?subject=SITI Enquiry" },
+            { icon: "🏢", title: "Enterprise Demo", desc: "30-min live demo for your ops team", action: "Book Demo", color: C.amber, href: `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent("Hi! I'd like to book a live demo of SITI Intelligence for our enterprise team.")}` },
+          ].map((item, i) => (
+            <a key={i} href={item.href} target="_blank" rel="noreferrer"
+              style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "18px", display: "flex", gap: 14, alignItems: "center", textDecoration: "none", transition: "border-color 0.2s, transform 0.2s" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = item.color + "66"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.transform = ""; }}>
+              <span style={{ fontSize: 28, flexShrink: 0 }}>{item.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 3 }}>{item.title}</div>
+                <div style={{ fontSize: 12, color: C.muted }}>{item.desc}</div>
+              </div>
+              <span style={{ color: item.color, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{item.action} →</span>
+            </a>
+          ))}
         </div>
       </div>
     </div>
   );
 }
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function SITIDashboard() {
-  const [kState, setKState] = useState(null);
-  const [ticker, setTicker] = useState({ revenue_saved: 0, total_diverted: 0, refresh_count: 0 });
-  const [loading, setLoading] = useState(true);
-  const [isCalibrating, setIsCalibrating] = useState(false);
-  const [showPayment, setShowPayment] = useState(false);
-  const [activeTab, setActiveTab] = useState("overview");
-  const [mu, setMu] = useState(150);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [isGhostMode, setIsGhostMode] = useState(false);
+// ── Dashboard Tab — Live Kernel Data ──────────────────────────────────────────
+function DashboardTab() {
+  const [kernelData, setKernelData] = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState(null);
+  const intervalRef = useRef(null);
 
-  const fetchState = useCallback(async () => {
+  const fetchKernel = useCallback(async () => {
     try {
-      const [stateRes, tickRes] = await Promise.all([
-        axios.get(`${API}/kernel/state`),
-        axios.post(`${API}/kernel/tick`),
-      ]);
-      setKState(stateRes.data);
-      setTicker(tickRes.data);
-      setLoading(false);
-    } catch (err) {
-      console.error("API fetch failed:", err);
+      const data = await apiCall("/api/kernel/status");
+      setKernelData(data);
+      setError(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchState();
-    const interval = setInterval(fetchState, 5000);
-    return () => clearInterval(interval);
-  }, [fetchState]);
+    fetchKernel();
+    intervalRef.current = setInterval(fetchKernel, 8000); // refresh every 8s
+    return () => clearInterval(intervalRef.current);
+  }, [fetchKernel]);
 
-  const hubs = kState?.hubs ?? [];
-  const globalRho = kState?.global_rho ?? 0;
-  const catastrophe = kState?.catastrophe;
-  const collapse = kState?.collapse;
-  const isConnected = !!kState;
-  const statusColor = collapse ? C.red : catastrophe ? C.yellow : C.green;
-  const bgColor = collapse ? "#140000" : catastrophe ? "#0D0000" : C.bg;
-
-  if (loading && !kState) {
-    return (
-      <div style={{ background: C.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16 }}>
-        <SitiLogo size={52} />
-        <div style={{ color: C.gold, fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 18, letterSpacing: "0.2em" }}>SITI INTELLIGENCE</div>
-        <div style={{ color: C.textDim, fontFamily: "'JetBrains Mono',monospace", fontSize: 11, letterSpacing: "0.12em" }}>CONNECTING TO MIMI KERNEL...</div>
-        <div style={{ fontSize: 9, color: C.textMuted }}>{API}</div>
-      </div>
-    );
-  }
+  const hubs    = kernelData?.hubs || [];
+  const critCt  = hubs.filter(h => h.risk === "critical").length;
+  const warnCt  = hubs.filter(h => h.risk === "warning").length;
+  const avgRho  = hubs.length > 0 ? (hubs.reduce((a, h) => a + h.rho, 0) / hubs.length).toFixed(4) : "—";
 
   return (
-    <div style={{ background: bgColor, minHeight: "100vh", fontFamily: "'JetBrains Mono',monospace", color: C.text, fontSize: 12, transition: "background 0.5s" }}>
-      <style>{`
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: ${C.bg}; } ::-webkit-scrollbar-thumb { background: ${C.border}; }
-        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-        @import url('https://fonts.googleapis.com/css2?family=Chivo:wght@700;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
-        input[type=range]{-webkit-appearance:none;height:4px;background:${C.border};border-radius:2px;outline:none}
-        input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;background:${C.green};border-radius:50%;cursor:pointer}
-      `}</style>
-
-      {isCalibrating && <CalibrationOverlay />}
-      {showPayment && <PaymentModal onClose={() => setShowPayment(false)} />}
-      {collapse && <div style={{ position: "fixed", inset: 0, border: `3px solid ${C.red}`, pointerEvents: "none", zIndex: 9997, animation: "blink 2s step-end infinite" }} />}
-
-      {/* TOP BAR */}
-      <div style={{ background: C.surface, borderBottom: `1px solid ${collapse ? C.red + "44" : C.border}`, padding: "0 16px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 54, position: "sticky", top: 0, zIndex: 100 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <SitiLogo size={34} />
-          <div>
-            <div style={{ fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 14, color: C.gold, letterSpacing: "0.2em" }}>SITI INTELLIGENCE</div>
-            <div style={{ fontSize: 8, color: C.textDim, letterSpacing: "0.1em" }}>LOGIC FOR THE PARADOX // POWERED BY MIMI v2.0</div>
-          </div>
-          <div style={{ width: 1, height: 28, background: C.border, margin: "0 8px" }} />
-          <div style={{ fontSize: 9, color: C.blue, letterSpacing: "0.1em" }}>CASE #02028317</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h1 style={{ fontSize: 28, fontWeight: 800, margin: "0 0 8px", letterSpacing: "-0.5px" }}>The Inverse Reliability Paradox</h1>
+          <p style={{ color: C.muted, fontSize: 14, margin: 0, lineHeight: 1.8, maxWidth: 600 }}>
+            At 100M+ shipments, traditional tracking breaks structurally.
+            SITI predicts network failure before cascade using Kalman filtering + M/M/1 queueing theory.
+          </p>
         </div>
-
-        <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
-          {(isGhostMode || isStreaming) && (
-            <div style={{ background: "#001A05", border: `1px solid ${C.neonGreen}`, color: C.neonGreen, fontSize: 9, fontWeight: 700, letterSpacing: "0.15em", padding: "3px 10px", display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.neonGreen, animation: "pulse 0.75s ease-in-out infinite" }} />
-              LIVE INFERENCE
-            </div>
-          )}
-          {[
-            { label: "NETWORK ρ", val: globalRho.toFixed(3), color: statusColor },
-            { label: "λ TOTAL/HR", val: kState?.total_lambda?.toFixed(0) ?? "—", color: C.blue },
-            { label: "SAVED", val: `$${ticker.revenue_saved?.toFixed(2)}`, color: C.green },
-            { label: "EXPOSURE", val: "$2,810,000", color: C.red },
-            { label: "SYSTEM STATUS", val: isConnected ? "RENDER-ACTIVE" : "RENDER-DOWN", color: isConnected ? C.green : C.red },
-          ].map(item => (
-            <div key={item.label} style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 7, color: C.textDim, letterSpacing: "0.1em", marginBottom: 2 }}>{item.label}</div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: item.color, fontFamily: "'JetBrains Mono',monospace" }}>{item.val}</div>
-            </div>
-          ))}
-          <button onClick={() => setShowPayment(true)} style={{ background: "#001A00", border: `1px solid ${C.green}`, color: C.green, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", padding: "5px 14px", cursor: "pointer" }}>
-            GET API KEY →
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: loading ? C.amber : error ? C.coral : C.emerald }} />
+          <span style={{ color: C.muted, fontSize: 12 }}>{loading ? "Connecting..." : error ? "Error" : "Live"}</span>
+          <button onClick={fetchKernel}
+            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+            ↻ Refresh
           </button>
         </div>
       </div>
 
-      {/* HERO METRIC */}
-      <div style={{ textAlign: "center", padding: "18px 16px 14px", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ fontSize: 9, color: C.textDim, letterSpacing: "0.25em", marginBottom: 4 }}>ANNUALIZED REVENUE RECOVERY</div>
-        <div style={{ fontSize: 46, fontWeight: 900, fontFamily: "'JetBrains Mono',monospace", color: C.neonGreen, lineHeight: 1, textShadow: `0 0 20px ${C.neonGreen}44` }}>$2.81M</div>
-        <div style={{ fontSize: 8.5, color: C.textDim, marginTop: 4, letterSpacing: "0.12em" }}>MIMI KERNEL v2.0 · {hubs.length}-HUB NETWORK · 2D KALMAN STATE OBSERVER</div>
-      </div>
-
-      {/* HUB CARDS */}
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.max(hubs.length, 3)}, 1fr)`, gap: 10, padding: "10px 16px" }}>
-        {hubs.map(hub => <HubCard key={hub.name} hub={hub} criticalRho={kState?.critical_rho} />)}
-      </div>
-
-      {/* ALERTS */}
-      {collapse && (
-        <div style={{ background: "#200000", border: `2px solid ${C.red}`, padding: "12px 24px", margin: "0 16px 4px", display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.red, animation: "blink 1s infinite" }} />
-          <div style={{ color: C.red, fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 14, letterSpacing: "0.2em" }}>NETWORK COLLAPSE: SIGMOIDAL DECAY TRIGGERED</div>
-        </div>
-      )}
-      {catastrophe && !collapse && (
-        <div style={{ background: "#1A0000", border: `1px solid #FF9F0A`, padding: "8px 24px", margin: "0 16px", display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ color: "#FF9F0A", fontFamily: "'Chivo',sans-serif", fontWeight: 900, fontSize: 12, letterSpacing: "0.15em", animation: "blink 1.5s infinite" }}>PREEMPTIVE DIVERSION PROTOCOL INITIATED</div>
-        </div>
-      )}
-      {!isConnected && (
-        <div style={{ background: "#0A0A1A", borderBottom: `1px solid ${C.blueDim}`, padding: "6px 24px", display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.blue, animation: "pulse 1.5s infinite" }} />
-          <div style={{ fontSize: 8.5, color: `${C.blue}88`, letterSpacing: "0.1em" }}>SIMULATION MODE · Upload CSV or connect API key for live data</div>
+      {error && (
+        <div style={{ padding: "12px 16px", background: C.coral + "15", border: `1px solid ${C.coral}33`, borderRadius: 10, color: C.coral, fontSize: 13 }}>
+          Backend error: {error} — <a href={`${API_BASE}/health`} target="_blank" rel="noreferrer" style={{ color: C.coral }}>Check health</a>
         </div>
       )}
 
-      {/* TAB BAR */}
-      <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, background: C.surface, margin: "8px 0 0" }}>
-        {[
-          { id: "overview", label: "NETWORK OVERVIEW" },
-          { id: "kernel", label: "MIMI KERNEL" },
-          { id: "live-api", label: "LIVE API STREAM" },
-          { id: "data", label: "DATA INJECTION" },
-        ].map(tab => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
-            padding: "9px 20px", fontSize: 8.5, letterSpacing: "0.1em", fontFamily: "'JetBrains Mono',monospace",
-            background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.gold : C.textDim,
-            borderBottom: `2px solid ${activeTab === tab.id ? C.gold : "transparent"}`, transition: "all 0.2s"
-          }}>{tab.label}</button>
-        ))}
-        {/* PVI Alert badge on tab */}
-        {kState?.pvi_alert && <div style={{ margin: "auto 0 auto 8px", background: "#1A0A00", border: `1px solid #FF9F0A`, color: "#FF9F0A", fontSize: 8, fontWeight: 700, padding: "2px 8px", animation: "blink 1s infinite" }}>PVI ALERT</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
+        <StatCard label="Total Shipments"   value={kernelData?.total_rows?.toLocaleString() || "—"}   sub="Upload CSV to analyze" color={C.accentLt} loading={loading} />
+        <StatCard label="Network Avg ρ"     value={avgRho}                                             sub={`${critCt} critical, ${warnCt} warning`} color={critCt > 0 ? C.coral : C.emerald} loading={loading} />
+        <StatCard label="Annualized Exposure" value="$2.81M"                                           sub="IRP baseline recovery target" color={C.coral} />
+        <StatCard label="Hub Count"         value={kernelData?.hub_count || (loading ? null : "0")}    sub="Active monitored hubs" color={C.teal} loading={loading} />
       </div>
 
-      {/* OVERVIEW TAB */}
-      {activeTab === "overview" && (
-        <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 1, background: C.border, padding: "12px 16px", gap: 12 }}>
-          {/* LEFT: KPI cards */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {hubs.length > 0 ? (
+        <>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14, color: C.text }}>Hub Network Status</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+              {hubs.map((hub, i) => <HubCard key={i} hub={hub} />)}
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, flexWrap: "wrap" }}>
+            <PieChart
+              title="Risk Distribution" subtitle="By hub utilization"
+              data={[hubs.filter(h => h.risk === "safe").length, warnCt, critCt]}
+              labels={["Safe (ρ < 0.70)", "Warning (ρ 0.70–0.85)", "Critical (ρ ≥ 0.85)"]}
+              colors={[C.emerald, C.amber, C.coral]}
+            />
+            <PieChart
+              title="Delay Profile" subtitle="Across all hubs"
+              data={[
+                hubs.reduce((a, h) => a + (h.on_time || 0), 0),
+                hubs.reduce((a, h) => a + (h.late || 0), 0),
+              ]}
+              labels={["On-time", "Late"]}
+              colors={[C.emerald, C.coral]}
+            />
+            <PieChart
+              title="IRP Exposure" subtitle="By risk category"
+              data={[
+                Math.round(hubs.filter(h => h.risk === "safe").length / Math.max(hubs.length, 1) * 100),
+                Math.round(warnCt / Math.max(hubs.length, 1) * 100),
+                Math.round(critCt / Math.max(hubs.length, 1) * 100),
+              ]}
+              labels={["Safe %", "Warning %", "Critical %"]}
+              colors={[C.emerald, C.amber, C.coral]}
+            />
+          </div>
+        </>
+      ) : !loading && !error && (
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "40px", textAlign: "center" }}>
+          <div style={{ fontSize: 36, marginBottom: 16 }}>📦</div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 8 }}>No data loaded yet</div>
+          <div style={{ color: C.muted, fontSize: 14, marginBottom: 20 }}>Upload a CSV in the Dataset tab to run the MIMI Kernel analysis</div>
+          <button style={{ background: C.accent, border: "none", borderRadius: 10, padding: "12px 24px", color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+            onClick={() => window.dispatchEvent(new CustomEvent("siti-tab", { detail: "upload" }))}>
+            Upload Dataset →
+          </button>
+        </div>
+      )}
+
+      <div style={{ background: C.card, border: `1px solid ${C.accent}30`, borderRadius: 14, padding: "20px" }}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>The Mathematics Behind SITI</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          {[
+            { label: "Load Factor ρ", formula: "λ / μ", color: C.coral, desc: "Arrival rate λ divided by service rate μ. When ρ > 0.85, hub is overloaded and sigmoidal decay triggers." },
+            { label: "IRP Score", formula: "Φ(ρ) · ln(N+1)", color: C.accentLt, desc: "At scale N, phi-weighted log term captures non-linear reliability degradation unique to high-importance shipments." },
+            { label: "Kalman Gain K", formula: "P⁻ / (P⁻ + R)", color: C.teal, desc: "Optimal state estimate blending prediction uncertainty P with observation noise R. T+3 forecast via random-walk model." },
+          ].map((m, i) => (
+            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "18px" }}>
+              <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>{m.label}</div>
+              <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 22, color: m.color, fontWeight: 500, marginBottom: 10 }}>{m.formula}</div>
+              <div style={{ color: C.muted, fontSize: 12, lineHeight: 1.7 }}>{m.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+export default function App() {
+  const [tab, setTab]               = useState("dashboard");
+  const [kernelStatus, setStatus]   = useState("Connecting");
+  const [purchasedKey, setPKey]     = useState(null);
+  const [paymentStatus, setPayStat] = useState(null);
+
+  // Listen for tab change events from child components
+  useEffect(() => {
+    const handler = e => setTab(e.detail);
+    window.addEventListener("siti-tab", handler);
+    return () => window.removeEventListener("siti-tab", handler);
+  }, []);
+
+  // Check kernel health on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/health`)
+      .then(r => r.ok ? setStatus("Online") : setStatus("Degraded"))
+      .catch(() => setStatus("Offline"));
+  }, []);
+
+  // Check for payment return (Cashfree redirect)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") === "success") {
+      setPKey(`siti-pilot-${Date.now().toString(36).toUpperCase()}`);
+      setPayStat({ plan: params.get("plan") || "pilot" });
+      setTab("keys");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  // BUG-008 FIX: Proper payment handler with Cashfree order creation
+  const handleBuy = async (plan) => {
+    if (plan.id === "enterprise" || plan.priceNum === null) {
+      const msg = encodeURIComponent(
+        `Hi! I'm interested in SITI Intelligence Enterprise plan (₹75,000+/month). Please share details.`
+      );
+      window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
+      return;
+    }
+
+    try {
+      const orderData = await apiCall("/api/payments/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: plan.id, amount: plan.priceNum }),
+      });
+
+      if (orderData.fallback && orderData.whatsapp_url) {
+        // Cashfree not configured — use WhatsApp fallback
+        window.open(orderData.whatsapp_url, "_blank");
+        return;
+      }
+
+      if (orderData.payment_session_id) {
+        // Load Cashfree SDK and launch checkout
+        const loaded = await new Promise(resolve => {
+          if (window.Cashfree) return resolve(true);
+          const s = document.createElement("script");
+          s.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
+          s.onload = () => resolve(true);
+          s.onerror = () => resolve(false);
+          document.head.appendChild(s);
+        });
+
+        if (loaded && window.Cashfree) {
+          const cf = new window.Cashfree({ mode: "production" });
+          cf.checkout({
+            paymentSessionId: orderData.payment_session_id,
+            returnUrl: `${window.location.origin}?payment=success&plan=${plan.id}`,
+          });
+          return;
+        }
+      }
+    } catch (e) {
+      console.error("Payment error:", e);
+    }
+
+    // Final fallback — always show WhatsApp for payment
+    const msg = encodeURIComponent(
+      `Hi! I want to purchase SITI Intelligence ${plan.name} plan (${plan.priceLabel}/month). Please help me complete the payment.`
+    );
+    window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
+  };
+
+  const TABS = [
+    { id: "dashboard", label: "Dashboard" },
+    { id: "upload",    label: "Dataset" },
+    { id: "pricing",   label: "Pricing" },
+    { id: "keys",      label: "API Keys" },
+    { id: "docs",      label: "Docs" },
+    { id: "contact",   label: "Contact" },
+  ];
+
+  const statusColor = kernelStatus === "Online" ? C.emerald : kernelStatus === "Offline" ? C.coral : C.amber;
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'Syne', sans-serif" }}>
+      <style>{FONTS}</style>
+
+      {/* Navbar */}
+      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 24px", display: "flex", alignItems: "center", height: 58, gap: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, background: `linear-gradient(135deg, ${C.accent} 0%, ${C.teal} 100%)`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 14 }}>S</div>
+            <span style={{ fontWeight: 800, fontSize: 16, letterSpacing: "-0.3px" }}>SITI Intelligence</span>
+            <span style={{ color: C.muted, fontSize: 11, fontFamily: "JetBrains Mono, monospace" }}>v4.0</span>
+          </div>
+          <div style={{ display: "flex", gap: 2, flex: 1, overflowX: "auto" }}>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{
+                background: tab === t.id ? C.accent + "20" : "transparent",
+                border: "none", borderBottom: `2px solid ${tab === t.id ? C.accent : "transparent"}`,
+                color: tab === t.id ? C.accentLt : C.muted,
+                padding: "10px 14px", fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                fontWeight: tab === t.id ? 600 : 400, transition: "all 0.15s", whiteSpace: "nowrap"
+              }}>{t.label}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+            <a href={`https://wa.me/${WA_NUMBER}?text=${WA_SUPPORT_MSG}`} target="_blank" rel="noreferrer"
+              style={{ background: "#25D366", border: "none", borderRadius: 8, padding: "6px 14px", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", textDecoration: "none", display: "flex", alignItems: "center", gap: 5 }}>
+              💬 WhatsApp
+            </a>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: statusColor }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor", display: "inline-block" }} />
+              {kernelStatus}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Page Content */}
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "28px 24px" }}>
+
+        {tab === "dashboard" && <DashboardTab />}
+
+        {tab === "upload" && (
+          <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+            <div>
+              <h2 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>Dataset Upload</h2>
+              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>
+                Upload any logistics CSV. Kaggle e-commerce, Delhivery, and custom 3PL formats are auto-mapped.
+              </p>
+            </div>
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "24px" }}>
+              <CSVUploadPanel />
+            </div>
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px" }}>
+              <div style={{ color: C.amber, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 12 }}>Auto-detected column mappings</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {[
+                  { siti: "hub_id",       kaggle: "Warehouse_block, block, hub, depot, zone" },
+                  { siti: "arrival_rate", kaggle: "lambda, arrival_count, volume (auto-synthesized)" },
+                  { siti: "service_rate", kaggle: "mu, capacity, throughput (auto-synthesized)" },
+                  { siti: "shipment_id",  kaggle: "ID, order_id, awb, tracking_no" },
+                ].map((c, i) => (
+                  <div key={i} style={{ background: C.card, borderRadius: 8, padding: "12px 14px" }}>
+                    <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: C.accentLt, marginBottom: 4 }}>SITI: {c.siti}</div>
+                    <div style={{ color: C.muted, fontSize: 11 }}>Maps: {c.kaggle}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "pricing" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+            <div style={{ textAlign: "center" }}>
+              <h2 style={{ fontSize: 28, fontWeight: 800, margin: "0 0 8px" }}>API Access Pricing</h2>
+              <p style={{ color: C.muted, fontSize: 14, margin: 0 }}>Value-based pricing for Indian 3PLs. No contracts.</p>
+            </div>
+            <div style={{ background: C.emerald + "10", border: `1px solid ${C.emerald}30`, borderRadius: 14, padding: "20px 24px", display: "flex", alignItems: "center", gap: 24 }}>
+              <div style={{ fontSize: 32 }}>📊</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: C.emerald, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>The ROI Calculation</div>
+                <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.7 }}>
+                  A 3PL with 50,000 shipments/month at 12% delay rate saves approximately{" "}
+                  <span style={{ color: C.text, fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>₹{ROI_SAVINGS.toLocaleString()}/month</span>{" "}
+                  with a 15% delay reduction. Growth plan costs ₹45,999.{" "}
+                  <span style={{ color: C.emerald, fontWeight: 700 }}>7× ROI on month one.</span>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18 }}>
+              {PLANS.map(plan => <PricingCard key={plan.id} plan={plan} onBuy={handleBuy} />)}
+            </div>
+            <div style={{ background: C.surface, borderRadius: 12, padding: "18px 24px", border: `1px solid ${C.border}`, display: "flex", gap: 20, alignItems: "center" }}>
+              <div style={{ fontSize: 24 }}>🔒</div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4 }}>Secure payments via Cashfree</div>
+                <div style={{ color: C.muted, fontSize: 13 }}>
+                  PCI-DSS compliant. UPI, cards, net banking, wallets. API key generated instantly on payment. Enterprise clients routed to WhatsApp for custom pricing.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "keys" && (
+          <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+            <div>
+              <h2 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>API Keys</h2>
+              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>Your active keys for the SITI Intelligence API.</p>
+            </div>
+            {paymentStatus && (
+              <div style={{ background: C.emerald + "15", border: `1px solid ${C.emerald}40`, borderRadius: 12, padding: "16px 20px" }}>
+                <div style={{ color: C.emerald, fontWeight: 700, marginBottom: 4 }}>🎉 Payment confirmed</div>
+                <div style={{ color: C.muted, fontSize: 13 }}>{paymentStatus.plan} plan activated. Your API key is below.</div>
+              </div>
+            )}
+            <APIKeyCard apiKey={purchasedKey || API_KEY} />
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>Quick Start Endpoints</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[
+                  { method: "GET",  path: "/health",                  desc: "Kernel health check" },
+                  { method: "GET",  path: "/api/hubs",                desc: "All hub IRP scores" },
+                  { method: "GET",  path: "/api/kernel/status",       desc: "Full kernel state" },
+                  { method: "POST", path: "/api/kernel/reset",        desc: "Upload CSV + analyze" },
+                  { method: "POST", path: "/api/kernel/predict",      desc: "Kalman T+3 prediction" },
+                  { method: "POST", path: "/api/kernel/analyze",      desc: "AI plain-English explanation" },
+                  { method: "POST", path: "/api/payments/create-order", desc: "Cashfree order creation" },
+                  { method: "POST", path: "/api/alerts/test",         desc: "Test Twilio SMS" },
+                ].map((e, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: C.surface, borderRadius: 8 }}>
+                    <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 10, fontWeight: 700, color: e.method === "GET" ? C.teal : C.amber, background: (e.method === "GET" ? C.teal : C.amber) + "20", border: `1px solid ${(e.method === "GET" ? C.teal : C.amber)}40`, borderRadius: 4, padding: "2px 6px", flexShrink: 0 }}>{e.method}</span>
+                    <code style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 12, color: C.accentLt, flex: 1 }}>{e.path}</code>
+                    <span style={{ color: C.muted, fontSize: 12 }}>{e.desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "docs" && (
+          <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+            <div>
+              <h2 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>Documentation</h2>
+              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>Integration guide for the SITI GSC Kernel API v4.0.</p>
+            </div>
             {[
-              { label: "NETWORK ρ (λ/μ)", val: globalRho.toFixed(4), color: collapse ? C.red : C.gold },
-              { label: "ARRIVALS λ/HR", val: `${kState?.total_lambda?.toFixed(1) ?? "—"}/hr`, color: C.blue },
-              { label: "SERVICE μ/HUB", val: `${kState?.mu?.toFixed(0) ?? mu}/hr`, color: C.green },
-              { label: "INSTABILITY Φ(ρ)", val: kState?.phi?.toFixed(4) ?? "—", color: (kState?.phi ?? 0) > 0.5 ? C.red : C.green },
-              { label: "QUEUE DEPTH W_q", val: Math.min(kState?.wq ?? 0, 99.9).toFixed(3), color: (kState?.wq ?? 0) > 4 ? C.red : C.blue },
-              { label: "DELIVERY FAIL RATE", val: `${((kState?.failure_rate ?? 0) * 100).toFixed(1)}%`, color: "#FF9F0A" },
-              { label: "HIGH-IMP FAILURES", val: `${kState?.inverse_reliability?.failure_count ?? 0}`, color: C.red },
-              { label: "LEAKAGE $3.94/UNIT", val: `$${kState?.inverse_reliability?.leakage_total?.toFixed(0) ?? 0}`, color: "#FF9F0A" },
-              { label: "REVENUE SAVED", val: `$${ticker.revenue_saved?.toFixed(2)}`, color: C.green },
-              { label: "DIVERTED UNITS", val: ticker.total_diverted?.toLocaleString(), color: C.green },
-            ].map(item => (
-              <div key={item.label} style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: "10px 12px" }}>
-                <div style={{ fontSize: 8, color: C.textDim, letterSpacing: "0.1em", marginBottom: 4 }}>{item.label}</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: item.color, fontFamily: "'JetBrains Mono',monospace", lineHeight: 1 }}>{item.val ?? "—"}</div>
+              {
+                title: "Authentication",
+                content: `// All requests require X-API-Key header
+fetch("${API_BASE}/api/hubs", {
+  headers: { "X-API-Key": "siti-admin-key-001" }
+});
+
+// Also accepts Authorization: Bearer <key>
+// For demo access use: siti-admin-key-001`
+              },
+              {
+                title: "POST /api/kernel/reset — Upload & Analyze (Kaggle CSV)",
+                content: `// Auto-maps Kaggle Warehouse_block → hub_id
+// Auto-synthesizes arrival_rate and service_rate from data
+const form = new FormData();
+form.append("file", csvFile);  // Kaggle, Delhivery, or custom CSV
+
+const result = await fetch("${API_BASE}/api/kernel/reset", {
+  method: "POST",
+  headers: {
+    "X-API-Key":   "your-key",
+    "X-Tenant-ID": "your-org"  // optional multi-tenant
+  },
+  body: form
+});
+// Returns: { success: true, summary: { hubs, global_rho, total_rows } }`
+              },
+              {
+                title: "POST /api/payments/create-order — Cashfree Integration",
+                content: `// Creates Cashfree order for subscription
+const order = await fetch("${API_BASE}/api/payments/create-order", {
+  method: "POST",
+  headers: {
+    "X-API-Key": "your-key",
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({ plan: "growth", amount: 45999 })
+});
+// Returns: { payment_session_id, order_id }
+// OR: { fallback: true, whatsapp_url } if Cashfree not configured`
+              },
+              {
+                title: "POST /api/kernel/predict — Kalman Prediction",
+                content: `// Feed delay observations, get T+3 prediction
+const result = await fetch("${API_BASE}/api/kernel/predict", {
+  method: "POST",
+  headers: {
+    "X-API-Key": "your-key",
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    hub_id: "WAREHOUSE-A",
+    observations: [0.62, 0.71, 0.78, 0.82]
+  })
+});
+// Returns: { smoothed, predicted: [t1,t2,t3,t4,t5], kalman_state }`
+              },
+            ].map((section, i) => (
+              <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+                <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 14, fontWeight: 700 }}>{section.title}</div>
+                <pre style={{ margin: 0, padding: "18px 20px", fontFamily: "JetBrains Mono, monospace", fontSize: 12, color: C.accentLt, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.8 }}>{section.content}</pre>
               </div>
             ))}
           </div>
+        )}
 
-          {/* RIGHT: Charts + IRP table */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <HubCharts kState={kState} />
-            <IRPTable kState={kState} />
+        {tab === "contact" && <ContactSection />}
+      </div>
+
+      {/* Footer */}
+      <div style={{ background: C.surface, borderTop: `1px solid ${C.border}`, marginTop: 60, padding: "32px 24px" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>SITI Intelligence</div>
+            <div style={{ color: C.muted, fontSize: 12 }}>Logic for the Paradox · Powered by MIMI Kernel v4.0</div>
+          </div>
+          <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
+            <a href={`https://wa.me/${WA_NUMBER}?text=${WA_SUPPORT_MSG}`} target="_blank" rel="noreferrer"
+              style={{ color: "#25D366", fontSize: 13, textDecoration: "none", fontWeight: 600 }}>💬 WhatsApp Support</a>
+            <a href="mailto:support@siti-intelligence.io" style={{ color: C.muted, fontSize: 13, textDecoration: "none" }}>support@siti-intelligence.io</a>
+            <span style={{ color: C.muted, fontSize: 12 }}>© 2026 SITI Intelligence</span>
           </div>
         </div>
-      )}
-
-      {/* KERNEL TAB */}
-      {activeTab === "kernel" && (
-        <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-          <MimiPanel kState={kState} />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
-              <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 10 }}>KALMAN GAIN (2D STATE)</div>
-              <div style={{ fontSize: 11, color: C.text, fontFamily: "'JetBrains Mono',monospace", marginBottom: 6 }}>K = P⁻H^T(HP⁻H^T + R)⁻¹</div>
-              <div style={{ fontSize: 12, color: C.blue, fontFamily: "'JetBrains Mono',monospace" }}>K = [{(kState?.kalman?.K ?? [0,0]).map(v => v.toFixed(4)).join(", ")}]</div>
-              <div style={{ fontSize: 8, color: C.textDim, marginTop: 4 }}>P_trace={kState?.kalman?.P?.toFixed(4)} · Q=diag(0.002,0.001) · R=0.005</div>
-            </div>
-            <div style={{ background: C.surface, border: `1px solid ${C.borderBright}`, padding: 14 }}>
-              <div style={{ fontSize: 9, color: C.text, letterSpacing: "0.12em", marginBottom: 10 }}>COMMANDER'S CONSOLE</div>
-              <div style={{ fontSize: 8, color: kState?.commander_level === "critical" ? C.red : kState?.commander_level === "efficiency" ? C.blue : C.green, lineHeight: 1.8, fontWeight: 700 }}>
-                {kState?.commander_message ?? "MIMI KERNEL: OPTIMAL FLOW DETECTED."}
-              </div>
-              <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <div style={{ background: C.panel, padding: "5px 8px", border: `1px solid ${C.border}` }}>
-                  <div style={{ fontSize: 7, color: C.textDim }}>T+3 PROJ</div>
-                  <div style={{ fontSize: 14, color: (kState?.rho_t3 ?? 0) >= 0.85 ? C.red : C.green, fontWeight: 700 }}>ρ={(kState?.rho_t3 ?? 0).toFixed(4)}</div>
-                </div>
-                <div style={{ background: C.panel, padding: "5px 8px", border: `1px solid ${C.border}` }}>
-                  <div style={{ fontSize: 7, color: C.textDim }}>PVI VOLATILITY</div>
-                  <div style={{ fontSize: 14, color: (kState?.pvi ?? 0) > 15 ? C.red : C.blue, fontWeight: 700 }}>{(kState?.pvi ?? 0).toFixed(1)}%</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* LIVE API TAB */}
-      {activeTab === "live-api" && (
-        <div style={{ padding: 16 }}>
-          <LiveAPIPanel apiBase={API_BASE} />
-        </div>
-      )}
-
-      {/* DATA INJECTION TAB */}
-      {activeTab === "data" && (
-        <div style={{ padding: 16 }}>
-          <DataInjectionPanel
-            onRefresh={fetchState}
-            kState={kState}
-            ticker={ticker}
-            mu={mu}
-            setMu={setMu}
-            isStreaming={isStreaming}
-            setIsStreaming={setIsStreaming}
-            isGhostMode={isGhostMode}
-            setIsGhostMode={setIsGhostMode}
-            onCalibrating={setIsCalibrating}
-          />
-        </div>
-      )}
+      </div>
     </div>
   );
 }
