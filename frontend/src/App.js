@@ -1,141 +1,139 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-// ── Config ───────────────────────────────────────────────────────────────────
-const API_BASE  = (process.env.REACT_APP_BACKEND_URL || "https://siti-gsc-kernel-1.onrender.com").replace(/\/$/, "");
-const API_KEY   = process.env.REACT_APP_API_KEY || "siti-admin-key-001";
+// ── Config — ONLY the backend URL is public. API key is user-supplied. ────────
+const API_BASE = (process.env.REACT_APP_BACKEND_URL || "https://siti-gsc-kernel-1.onrender.com").replace(/\/$/, "");
 const WA_NUMBER = "918956493671";
-const WA_SUPPORT_MSG = encodeURIComponent(
-  "Hi! I came from SITI Intelligence. I'd like to know more about your logistics platform."
-);
+const WA_MSG    = encodeURIComponent("Hi! I'd like to learn more about SITI Intelligence logistics platform.");
 
 // ── Fonts ─────────────────────────────────────────────────────────────────────
 const FONTS = `@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');`;
 
-// ── Color Palette ─────────────────────────────────────────────────────────────
+// ── Palette ───────────────────────────────────────────────────────────────────
 const C = {
-  bg: "#08080f", surface: "#0f0f1a", card: "#141422", cardHover: "#1a1a2e",
-  border: "#1e1e35", borderHi: "#2e2e50", accent: "#5b5bd6", accentLt: "#818cf8",
+  bg: "#08080f", surface: "#0d0d1a", card: "#12121f", cardHover: "#181828",
+  border: "#1e1e38", borderHi: "#2a2a50", accent: "#5b5bd6", accentLt: "#818cf8",
   teal: "#14b8a6", coral: "#f87171", amber: "#f59e0b", emerald: "#10b981",
-  rose: "#fb7185", text: "#e8e8f0", muted: "#6b6b8a", dim: "#3a3a5c",
+  text: "#e8e8f0", muted: "#5a5a80", dim: "#2a2a45",
+  danger: "#ef4444", success: "#22c55e", warning: "#eab308",
 };
 
-// ── Chart JS Lazy Loader ──────────────────────────────────────────────────────
-const loadChartJS = () => new Promise((resolve) => {
-  if (window.Chart) return resolve(window.Chart);
-  const s = document.createElement("script");
-  s.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js";
-  s.onload = () => resolve(window.Chart);
-  document.head.appendChild(s);
-});
-
-// ── Pricing Plans ─────────────────────────────────────────────────────────────
+// ── Pricing ───────────────────────────────────────────────────────────────────
 const PLANS = [
   {
-    id: "pilot",
-    name: "Pilot",
-    priceLabel: "₹9,999",
-    priceNum: 9999,
-    period: "/month",
+    id: "pilot", name: "Pilot", badge: "Start Here",
+    priceLabel: "₹9,999", priceNum: 9999, period: "/month",
     tagline: "30-day proof of value. No commitment.",
-    calls: "5,000 API calls",
-    hubs: "Up to 3 hubs",
-    sms: "30 SMS alerts",
-    features: [
-      "Kalman filter delay predictions",
-      "IRP score per hub",
-      "CSV dataset ingestion",
-      "Email support within 48h",
-      "Upgrade anytime, no penalty",
-    ],
-    color: C.teal,
-    recommended: false,
-    cta: "Start Pilot →",
+    credits: "5,000 API credits",
+    features: ["Kalman filter predictions", "IRP score per hub", "CSV auto-mapping", "SMS alerts", "48h email support"],
+    color: C.teal, recommended: false, cta: "Start Pilot →",
   },
   {
-    id: "growth",
-    name: "Growth",
-    priceLabel: "₹45,999",
-    priceNum: 45999,
-    period: "/month",
-    tagline: "For 3PLs processing 10K–500K shipments/month.",
-    calls: "1,00,000 API calls",
-    hubs: "Up to 25 hubs",
-    sms: "500 SMS alerts",
-    features: [
-      "Everything in Pilot",
-      "Twilio SMS alerts",
-      "AI failure explanation",
-      "Real-time hub dashboard",
-      "Priority support within 12h",
-      "Dedicated API key per tenant",
-    ],
-    color: C.accent,
-    recommended: true,
-    cta: "Activate Growth →",
+    id: "growth", name: "Growth", badge: "Most Popular",
+    priceLabel: "₹45,999", priceNum: 45999, period: "/month",
+    tagline: "For 3PLs with 10K–500K shipments/month.",
+    credits: "1,00,000 API credits",
+    features: ["Everything in Pilot", "WhatsApp key delivery", "AI failure explanation", "Priority 12h support", "Multi-tenant API keys"],
+    color: C.accent, recommended: true, cta: "Activate Growth →",
   },
   {
-    id: "enterprise",
-    name: "Enterprise",
-    priceLabel: "₹75,000+",
-    priceNum: null,
-    period: "/month",
-    tagline: "Dedicated instance. SLA-backed. Built for scale.",
-    calls: "Unlimited calls",
-    hubs: "Unlimited hubs",
-    sms: "Unlimited alerts",
-    features: [
-      "Everything in Growth",
-      "Dedicated kernel on your infra",
-      "99.9% uptime SLA",
-      "Custom CSV schema mapping",
-      "Onboarding + training session",
-      "Direct engineering line",
-    ],
-    color: C.amber,
-    recommended: false,
-    cta: "WhatsApp Us →",
+    id: "enterprise", name: "Enterprise", badge: "Custom",
+    priceLabel: "₹75,000+", priceNum: null, period: "/month",
+    tagline: "Dedicated. SLA-backed. Built for Delhivery scale.",
+    credits: "Unlimited credits",
+    features: ["Everything in Growth", "Dedicated kernel", "99.9% SLA", "Custom schema mapping", "Engineering hotline"],
+    color: C.amber, recommended: false, cta: "WhatsApp Us →",
   },
 ];
 
-const ROI_SAVINGS = Math.round(50000 * 0.12 * 1200 * 0.15);
-
-// ── API Helper ────────────────────────────────────────────────────────────────
-async function apiCall(path, options = {}) {
-  const url = `${API_BASE}${path}`;
-  const headers = {
-    "X-API-Key": API_KEY,
-    ...options.headers,
-  };
-  const res = await fetch(url, { ...options, headers });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw Object.assign(new Error(err.error || "API Error"), { status: res.status, data: err });
-  }
-  return res.json();
+// ── Secure API helper ─────────────────────────────────────────────────────────
+// The user's API key is stored in sessionStorage (cleared on tab close).
+// It is NEVER hardcoded, NEVER in the JS bundle, NEVER in env vars.
+function getStoredKey() {
+  try { return sessionStorage.getItem("siti_api_key") || ""; }
+  catch { return ""; }
+}
+function setStoredKey(k) {
+  try { sessionStorage.setItem("siti_api_key", k); }
+  catch { /* private browsing */ }
+}
+function clearStoredKey() {
+  try { sessionStorage.removeItem("siti_api_key"); }
+  catch { /* */ }
 }
 
-// ── Small Components ──────────────────────────────────────────────────────────
+async function apiCall(path, opts = {}, key = null) {
+  const k   = key || getStoredKey();
+  const url = `${API_BASE}${path}`;
+  const headers = {
+    ...(k ? { "X-API-Key": k } : {}),
+    ...(opts.headers || {}),
+  };
+  const res = await fetch(url, { ...opts, headers });
+  const json = await res.json().catch(() => ({ error: res.statusText }));
+  if (!res.ok) throw Object.assign(new Error(json.error || "API error"), { status: res.status, data: json });
+  return json;
+}
+
+// ── Small components ──────────────────────────────────────────────────────────
 function Badge({ label, color }) {
   return (
-    <span style={{
-      background: color + "20", color, border: `1px solid ${color}40`,
-      borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 600
-    }}>{label}</span>
+    <span style={{ background: color + "22", color, border: `1px solid ${color}44`, borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 600 }}>
+      {label}
+    </span>
+  );
+}
+
+function Pill({ label, variant = "default" }) {
+  const colors = { safe: C.emerald, warning: C.amber, critical: C.coral, default: C.muted };
+  const c = colors[variant] || colors.default;
+  return (
+    <span style={{ background: c + "20", color: c, border: `1px solid ${c}40`, borderRadius: 12, padding: "2px 8px", fontSize: 10, fontWeight: 700, letterSpacing: "0.4px" }}>
+      {label.toUpperCase()}
+    </span>
+  );
+}
+
+function Card({ children, style = {} }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px", ...style }}>
+      {children}
+    </div>
   );
 }
 
 function StatCard({ label, value, sub, color = C.accentLt, loading = false }) {
   return (
-    <div style={{
-      background: C.card, border: `1px solid ${C.border}`, borderRadius: 14,
-      padding: "20px 22px", position: "relative", overflow: "hidden"
-    }}>
+    <Card style={{ position: "relative", overflow: "hidden" }}>
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: color }} />
-      <div style={{ color: C.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 10 }}>{label}</div>
-      <div style={{ fontSize: 30, fontWeight: 700, fontFamily: "JetBrains Mono, monospace", color: loading ? C.dim : C.text, lineHeight: 1 }}>
-        {loading ? "···" : value}
+      <div style={{ color: C.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "JetBrains Mono, monospace", color: loading ? C.dim : C.text, lineHeight: 1 }}>
+        {loading ? "···" : (value ?? "—")}
       </div>
-      {sub && <div style={{ color, fontSize: 12, marginTop: 6, fontWeight: 500 }}>{sub}</div>}
+      {sub && <div style={{ color, fontSize: 11, marginTop: 6, fontWeight: 500 }}>{sub}</div>}
+    </Card>
+  );
+}
+
+// ── Credit Bar ────────────────────────────────────────────────────────────────
+function CreditBar({ total, used, plan }) {
+  if (!total) return <div style={{ color: C.emerald, fontSize: 12, fontWeight: 700 }}>∞ Unlimited credits</div>;
+  const pct  = Math.min((used / total) * 100, 100);
+  const left = total - used;
+  const barC = pct > 90 ? C.coral : pct > 70 ? C.amber : C.emerald;
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, marginBottom: 6 }}>
+        <span>{left.toLocaleString()} credits remaining</span>
+        <span>{used.toLocaleString()} / {total.toLocaleString()} used</span>
+      </div>
+      <div style={{ height: 6, background: C.dim, borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: barC, transition: "width 0.4s, background 0.3s", borderRadius: 3 }} />
+      </div>
+      {pct > 85 && (
+        <div style={{ color: C.coral, fontSize: 11, marginTop: 6, fontWeight: 600 }}>
+          ⚠ Running low — upgrade to {plan === "pilot" ? "Growth" : "Enterprise"} for more credits
+        </div>
+      )}
     </div>
   );
 }
@@ -143,46 +141,42 @@ function StatCard({ label, value, sub, color = C.accentLt, loading = false }) {
 // ── Hub Card ──────────────────────────────────────────────────────────────────
 function HubCard({ hub }) {
   const rc = hub.risk === "critical" ? C.coral : hub.risk === "warning" ? C.amber : C.emerald;
-  const rhoPct = Math.min(hub.rho * 100, 100);
   return (
-    <div style={{
-      background: C.card, border: `1px solid ${rc}44`, borderRadius: 14, padding: "18px",
-      position: "relative", overflow: "hidden", transition: "border-color 0.3s"
-    }}>
+    <div style={{ background: C.card, border: `1.5px solid ${rc}44`, borderRadius: 14, padding: "18px", position: "relative", overflow: "hidden" }}>
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: rc }} />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 13, fontWeight: 700, color: C.text }}>
-          {hub.hub_id}
-        </div>
-        <Badge label={hub.risk.toUpperCase()} color={rc} />
+        <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 12, fontWeight: 700, color: C.text }}>{hub.hub_id}</span>
+        <Pill label={hub.risk} variant={hub.risk} />
       </div>
-      <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "JetBrains Mono, monospace", color: rc, marginBottom: 8 }}>
-        ρ = {hub.rho.toFixed(4)}
+      <div style={{ fontSize: 26, fontWeight: 700, fontFamily: "JetBrains Mono, monospace", color: rc, marginBottom: 8 }}>
+        ρ = {hub.rho?.toFixed(4)}
       </div>
       <div style={{ height: 4, background: C.dim, borderRadius: 2, marginBottom: 10, overflow: "hidden", position: "relative" }}>
-        <div style={{ width: `${rhoPct}%`, height: "100%", background: rc, transition: "width 0.5s" }} />
-        <div style={{ position: "absolute", left: "85%", top: 0, bottom: 0, width: 1, background: C.coral }} />
+        <div style={{ width: `${Math.min(hub.rho * 100, 100)}%`, height: "100%", background: rc, transition: "width 0.5s" }} />
+        <div style={{ position: "absolute", left: "85%", top: 0, bottom: 0, width: 1, background: C.coral + "88" }} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
         {[
-          { k: "λ arrival",   v: `${hub.lambda.toFixed(2)}/hr`,  c: C.accentLt },
-          { k: "μ capacity",  v: `${hub.mu.toFixed(2)}/hr`,      c: C.emerald },
-          { k: "Shipments",   v: hub.shipments?.toLocaleString(), c: C.text },
-          { k: "IRP Score",   v: `${hub.irp_score?.toFixed(2)}/10`, c: hub.irp_score > 7 ? C.coral : C.amber },
+          { k: "λ",   v: `${hub.lambda?.toFixed(2)}/hr`, c: C.accentLt },
+          { k: "μ",   v: `${hub.mu?.toFixed(2)}/hr`,     c: C.emerald },
+          { k: "Late",v: hub.late?.toLocaleString(),       c: C.coral },
+          { k: "IRP", v: `${hub.irp_score?.toFixed(2)}/10`, c: hub.irp_score > 7 ? C.coral : C.amber },
         ].map((s, i) => (
-          <div key={i} style={{ background: C.surface, borderRadius: 8, padding: "8px 10px" }}>
-            <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 3 }}>{s.k}</div>
-            <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 14, fontWeight: 600, color: s.c }}>{s.v || "—"}</div>
+          <div key={i} style={{ background: C.surface, borderRadius: 8, padding: "7px 10px" }}>
+            <div style={{ color: C.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 3 }}>{s.k}</div>
+            <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 13, fontWeight: 600, color: s.c }}>{s.v || "—"}</div>
           </div>
         ))}
       </div>
+      {hub.leakage > 0 && (
+        <div style={{ background: C.coral + "12", border: `1px solid ${C.coral}33`, borderRadius: 8, padding: "7px 10px", fontSize: 11, color: C.coral }}>
+          IRP Leakage: <span style={{ fontWeight: 700, fontFamily: "monospace" }}>${hub.leakage.toFixed(2)}</span>
+        </div>
+      )}
       {hub.kalman_t3 != null && (
-        <div style={{ marginTop: 10, padding: "8px 10px", background: C.surface, borderRadius: 8 }}>
-          <div style={{ color: C.muted, fontSize: 10, marginBottom: 2 }}>KALMAN T+3 FORECAST</div>
-          <div style={{
-            fontFamily: "JetBrains Mono, monospace", fontSize: 14, fontWeight: 700,
-            color: hub.kalman_t3 >= 0.85 ? C.coral : hub.kalman_t3 > 0.70 ? C.amber : C.emerald
-          }}>
+        <div style={{ marginTop: 8, background: C.surface, borderRadius: 8, padding: "7px 10px" }}>
+          <div style={{ color: C.muted, fontSize: 9, marginBottom: 3 }}>KALMAN T+3 FORECAST</div>
+          <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 13, fontWeight: 700, color: hub.kalman_t3 >= 0.85 ? C.coral : hub.kalman_t3 > 0.70 ? C.amber : C.emerald }}>
             ρ = {hub.kalman_t3.toFixed(4)}
           </div>
         </div>
@@ -191,660 +185,707 @@ function HubCard({ hub }) {
   );
 }
 
-// ── Donut Chart ───────────────────────────────────────────────────────────────
-function PieChart({ data, colors, labels, title, subtitle }) {
-  const ref = useRef(null);
-  const chartRef = useRef(null);
-  useEffect(() => {
-    loadChartJS().then((Chart) => {
-      if (chartRef.current) chartRef.current.destroy();
-      if (!ref.current) return;
-      chartRef.current = new Chart(ref.current, {
-        type: "doughnut",
-        data: { labels, datasets: [{ data, backgroundColor: colors.map(c => c + "cc"), borderColor: colors, borderWidth: 2, hoverOffset: 6 }] },
-        options: {
-          responsive: true, maintainAspectRatio: false, cutout: "68%",
-          plugins: {
-            legend: { display: false },
-            tooltip: { backgroundColor: C.card, borderColor: C.borderHi, borderWidth: 1, titleColor: C.text, bodyColor: C.muted, padding: 12 },
-          },
-        },
-      });
-    });
-    return () => { if (chartRef.current) chartRef.current.destroy(); };
-  }, [JSON.stringify(data)]);
+// ── API Key Entry ─────────────────────────────────────────────────────────────
+function KeyEntry({ onKeySet }) {
+  const [val, setVal] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const verify = async () => {
+    if (!val.trim()) return;
+    setLoading(true); setErr(null);
+    try {
+      // Verify the key by calling /api/keys/info
+      const info = await apiCall("/api/keys/info", {}, val.trim());
+      setStoredKey(val.trim());
+      onKeySet(info);
+    } catch (e) {
+      setErr(e.status === 403 ? "Invalid or inactive API key." : e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px" }}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4 }}>{title}</div>
-      <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>{subtitle}</div>
-      <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
-        <div style={{ width: 140, height: 140, flexShrink: 0 }}><canvas ref={ref} /></div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
-          {labels.map((l, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 10, height: 10, borderRadius: "50%", background: colors[i], flexShrink: 0 }} />
-              <div style={{ flex: 1, fontSize: 12, color: C.muted }}>{l}</div>
-              <div style={{ fontFamily: "monospace", fontSize: 12, color: C.text, fontWeight: 500 }}>{data[i]?.toLocaleString()}</div>
+    <Card>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Enter Your API Key</div>
+      <div style={{ color: C.muted, fontSize: 12, marginBottom: 14, lineHeight: 1.7 }}>
+        Your key was sent to your WhatsApp after payment. Paste it here to activate your dashboard.
+        Keys are stored only in your browser session and cleared when you close the tab.
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <input
+          type="password"
+          value={val}
+          onChange={e => setVal(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && verify()}
+          placeholder="siti-pilot-xxxxxxxxxxxxxxxxxxxx"
+          style={{ flex: 1, background: C.surface, border: `1px solid ${err ? C.coral : C.border}`, borderRadius: 8, padding: "10px 14px", color: C.text, fontSize: 13, fontFamily: "JetBrains Mono, monospace", outline: "none" }}
+        />
+        <button
+          onClick={verify}
+          disabled={!val.trim() || loading}
+          style={{ background: C.accent, border: "none", borderRadius: 8, padding: "10px 20px", color: "white", fontSize: 13, fontWeight: 600, cursor: val.trim() ? "pointer" : "not-allowed", fontFamily: "inherit", opacity: (!val.trim() || loading) ? 0.6 : 1 }}>
+          {loading ? "Verifying..." : "Activate →"}
+        </button>
+      </div>
+      {err && <div style={{ color: C.coral, fontSize: 12, marginTop: 8 }}>{err}</div>}
+      <div style={{ marginTop: 14, padding: "10px 14px", background: C.surface, borderRadius: 8, fontSize: 12, color: C.muted }}>
+        Don't have a key?{" "}
+        <a href="#pricing" style={{ color: C.accentLt, textDecoration: "none" }} onClick={() => window.dispatchEvent(new CustomEvent("siti-tab", { detail: "pricing" }))}>
+          Purchase a plan
+        </a>{" "}or{" "}
+        <a href={`https://wa.me/${WA_NUMBER}?text=${encodeURIComponent("Hi! I need an API key for SITI Intelligence.")}`} target="_blank" rel="noreferrer" style={{ color: "#25D366", textDecoration: "none" }}>
+          contact us on WhatsApp
+        </a>.
+      </div>
+    </Card>
+  );
+}
+
+// ── Key Info Panel ────────────────────────────────────────────────────────────
+function KeyInfoPanel({ keyInfo, onLogout }) {
+  const [testResult, setTestResult] = useState(null);
+  const [testing, setTesting]       = useState(false);
+  const [copied, setCopied]         = useState(false);
+
+  const testAlert = async (channel) => {
+    setTesting(true); setTestResult(null);
+    try {
+      const res = await apiCall("/api/alerts/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel }),
+      });
+      setTestResult({ ok: res.result?.sent, ...res });
+    } catch (e) {
+      setTestResult({ ok: false, error: e.message });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const copyKey = () => {
+    const k = getStoredKey();
+    if (k) { navigator.clipboard.writeText(k); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>API Key Active</div>
+            <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>
+              {keyInfo.key_preview} · {keyInfo.plan?.toUpperCase()} plan
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={copyKey}
+              style={{ background: copied ? C.emerald + "20" : C.surface, border: `1px solid ${copied ? C.emerald : C.border}`, borderRadius: 8, padding: "7px 14px", color: copied ? C.emerald : C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+              {copied ? "Copied!" : "Copy Key"}
+            </button>
+            <button onClick={() => { clearStoredKey(); onLogout(); }}
+              style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 14px", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+              Sign Out
+            </button>
+          </div>
+        </div>
+
+        <CreditBar total={keyInfo.credits_total} used={keyInfo.credits_used} plan={keyInfo.plan} />
+
+        <div style={{ marginTop: 14, padding: "10px 14px", background: C.surface, borderRadius: 8 }}>
+          <div style={{ color: C.muted, fontSize: 11, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>Credit costs</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, color: C.muted }}>
+            {[
+              ["GET /api/hubs", "1 credit"], ["GET /api/kernel/status", "1 credit"],
+              ["POST /api/kernel/reset (CSV)", "10 credits"], ["POST /api/kernel/predict", "2 credits"],
+              ["POST /api/kernel/analyze (AI)", "5 credits"], ["POST /api/alerts/test", "1 credit"],
+            ].map(([ep, cost], i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", background: C.card, borderRadius: 6, padding: "6px 10px" }}>
+                <code style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 10, color: C.accentLt }}>{ep}</code>
+                <span style={{ color: C.amber, fontWeight: 600, fontSize: 11 }}>{cost}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      {/* Twilio Alert Test */}
+      <Card>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Test Twilio Alerts</div>
+        <div style={{ color: C.muted, fontSize: 12, marginBottom: 14, lineHeight: 1.7 }}>
+          Verify your SMS and WhatsApp alerts are configured correctly. Check the backend's{" "}
+          <code style={{ color: C.accentLt, fontSize: 11 }}>TWILIO_FROM_NUMBER</code> and{" "}
+          <code style={{ color: C.accentLt, fontSize: 11 }}>TWILIO_ALERT_NUMBER</code> env vars.
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={() => testAlert("sms")} disabled={testing}
+            style={{ background: C.surface, border: `1px solid ${C.accent}`, borderRadius: 8, padding: "9px 18px", color: C.accentLt, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            {testing ? "Sending..." : "📱 Test SMS"}
+          </button>
+          <button onClick={() => testAlert("whatsapp")} disabled={testing}
+            style={{ background: C.surface, border: "1px solid #25D366", borderRadius: 8, padding: "9px 18px", color: "#25D366", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            {testing ? "Sending..." : "💬 Test WhatsApp"}
+          </button>
+        </div>
+
+        {testResult && (
+          <div style={{ marginTop: 12, padding: "12px 14px", background: testResult.ok ? C.emerald + "12" : C.coral + "12", border: `1px solid ${testResult.ok ? C.emerald : C.coral}33`, borderRadius: 8 }}>
+            <div style={{ color: testResult.ok ? C.emerald : C.coral, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+              {testResult.ok ? "✅ Alert sent successfully!" : "❌ Alert failed"}
+            </div>
+            {!testResult.ok && (
+              <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>
+                <div><strong style={{ color: C.text }}>Reason:</strong> {testResult.result?.reason || testResult.error}</div>
+                <div style={{ marginTop: 8, color: C.muted }}>
+                  <strong style={{ color: C.text }}>Diagnosis:</strong>
+                  {Object.entries(testResult.diagnosis || {}).map(([k, v]) => (
+                    <div key={k} style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+                      <span style={{ color: v ? C.emerald : C.coral, fontSize: 14 }}>{v ? "✓" : "✗"}</span>
+                      <code style={{ fontSize: 11, color: v ? C.muted : C.coral }}>{k}</code>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 10, padding: "8px 10px", background: C.surface, borderRadius: 6, fontSize: 11, color: C.muted }}>
+                  Set in Render Dashboard → Environment Variables
+                </div>
+              </div>
+            )}
+            {testResult.ok && (
+              <div style={{ fontSize: 12, color: C.muted }}>
+                Sent to: <code style={{ color: C.accentLt, fontSize: 11 }}>{testResult.to_number}</code><br />
+                SID: <code style={{ color: C.accentLt, fontSize: 11 }}>{testResult.result?.sid}</code>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Endpoint List */}
+      <Card>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>Available Endpoints</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[
+            { m: "GET",  p: "/health",               d: "Health check",            cost: "free" },
+            { m: "GET",  p: "/ping",                  d: "Keep-alive ping",          cost: "free" },
+            { m: "GET",  p: "/api/hubs",              d: "All hub IRP scores",       cost: "1" },
+            { m: "GET",  p: "/api/kernel/status",     d: "Full kernel state",        cost: "1" },
+            { m: "POST", p: "/api/kernel/reset",      d: "Upload CSV + analyze",     cost: "10" },
+            { m: "POST", p: "/api/kernel/predict",    d: "Kalman T+3 prediction",    cost: "2" },
+            { m: "POST", p: "/api/kernel/analyze",    d: "AI explanation",           cost: "5" },
+            { m: "POST", p: "/api/alerts/test",       d: "Test Twilio alerts",       cost: "1" },
+            { m: "GET",  p: "/api/keys/info",         d: "Credit balance",           cost: "free" },
+            { m: "POST", p: "/api/payments/create-order", d: "Cashfree order",      cost: "free" },
+          ].map((e, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: C.surface, borderRadius: 8 }}>
+              <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 9, fontWeight: 700, color: e.m === "GET" ? C.teal : C.amber, background: (e.m === "GET" ? C.teal : C.amber) + "18", border: `1px solid ${(e.m === "GET" ? C.teal : C.amber)}35`, borderRadius: 4, padding: "2px 6px", flexShrink: 0 }}>{e.m}</span>
+              <code style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: C.accentLt, flex: 1 }}>{e.p}</code>
+              <span style={{ color: C.muted, fontSize: 11 }}>{e.d}</span>
+              <span style={{ color: e.cost === "free" ? C.emerald : C.amber, fontSize: 10, fontWeight: 600, fontFamily: "monospace", flexShrink: 0 }}>{e.cost === "free" ? "free" : `${e.cost}cr`}</span>
             </div>
           ))}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }
 
 // ── CSV Upload Panel ──────────────────────────────────────────────────────────
-function CSVUploadPanel() {
+function CSVUploadPanel({ onResult }) {
   const [drag, setDrag]       = useState(false);
   const [file, setFile]       = useState(null);
   const [status, setStatus]   = useState(null);
-  const [result, setResult]   = useState(null);
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUpl]   = useState(false);
 
   const handleFile = (f) => {
     if (!f?.name?.toLowerCase().endsWith(".csv")) {
-      setStatus({ type: "error", msg: "Only .csv files are supported." });
+      setStatus({ type: "error", msg: "Only .csv files accepted." });
       return;
     }
-    setFile(f);
-    setStatus(null);
-    setResult(null);
+    if (f.size > 10 * 1024 * 1024) {
+      setStatus({ type: "error", msg: "File too large (max 10 MB)." });
+      return;
+    }
+    setFile(f); setStatus(null);
   };
 
-  const handleUpload = async () => {
+  const upload = async () => {
     if (!file) return;
-    setUploading(true);
-    setStatus({ type: "loading", msg: "Running MIMI Kernel analysis..." });
+    const key = getStoredKey();
+    if (!key) { setStatus({ type: "error", msg: "Enter your API key in the Keys tab first." }); return; }
+
+    setUpl(true);
+    setStatus({ type: "loading", msg: "Uploading and running MIMI Kernel analysis…" });
+
     const form = new FormData();
     form.append("file", file);
+
     try {
-      // BUG-003 FIX: Backend now auto-maps Kaggle columns
       const data = await apiCall("/api/kernel/reset", {
         method: "POST",
         headers: { "X-Tenant-ID": "default" },
         body: form,
       });
+
+      const s = data.summary;
       setStatus({
         type: "success",
-        msg: `Analysis complete — ${data.summary?.total_rows?.toLocaleString()} rows, ${data.summary?.hub_count} hubs detected.`
+        msg: `✅ Analysis complete — ${s.total_rows?.toLocaleString()} rows, ${s.hub_count} hubs, ${s.hubs?.filter(h => h.risk === "critical").length || 0} critical.`,
       });
-      setResult(data.summary);
+      if (data.sms_fired && data.sms_result) {
+        setStatus(prev => ({
+          ...prev,
+          smsResult: data.sms_result,
+        }));
+      }
+      onResult(data.summary);
     } catch (e) {
-      setStatus({ type: "error", msg: e.message || "Upload failed." });
+      const detail = e.data?.detail;
+      const msg = detail?.type === "SCHEMA_MISMATCH"
+        ? `Schema mismatch. Found columns: ${detail.found_columns?.slice(0, 5).join(", ")}…`
+        : e.message;
+      setStatus({ type: "error", msg });
     } finally {
-      setUploading(false);
+      setUpl(false);
     }
   };
 
   const sc = status?.type === "success" ? C.emerald : status?.type === "error" ? C.coral : C.accentLt;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div
         onDragOver={e => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={e => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files[0]); }}
-        onClick={() => document.getElementById("csv-file-main").click()}
-        style={{
-          border: `2px dashed ${drag ? C.teal : file ? C.accent : C.border}`,
-          borderRadius: 14, padding: "40px 24px", textAlign: "center",
-          cursor: "pointer", background: drag ? C.teal + "08" : file ? C.accent + "08" : "transparent",
-          transition: "all 0.2s"
-        }}
+        onClick={() => document.getElementById("siti-csv").click()}
+        style={{ border: `2px dashed ${drag ? C.teal : file ? C.accent : C.border}`, borderRadius: 14, padding: "40px 24px", textAlign: "center", cursor: "pointer", background: drag ? C.teal + "06" : file ? C.accent + "06" : "transparent", transition: "all 0.2s" }}
       >
-        <div style={{ fontSize: 36, marginBottom: 12 }}>📡</div>
+        <div style={{ fontSize: 34, marginBottom: 10 }}>📡</div>
         {file ? (
           <>
-            <div style={{ color: C.accentLt, fontSize: 15, fontWeight: 600 }}>{file.name}</div>
-            <div style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>{(file.size / 1024).toFixed(1)} KB — click to change</div>
+            <div style={{ color: C.accentLt, fontSize: 14, fontWeight: 600 }}>{file.name}</div>
+            <div style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>{(file.size / 1024).toFixed(1)} KB · click to change</div>
           </>
         ) : (
           <>
-            <div style={{ color: C.text, fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Drop your logistics dataset</div>
-            <div style={{ color: C.muted, fontSize: 13 }}>Kaggle e-commerce CSV, Delhivery, or any hub data — auto-mapped</div>
+            <div style={{ color: C.text, fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Drop your logistics CSV</div>
+            <div style={{ color: C.muted, fontSize: 13 }}>Kaggle e-commerce, Delhivery, or custom hub data — auto-mapped</div>
           </>
         )}
-        <input id="csv-file-main" type="file" accept=".csv" style={{ display: "none" }}
-          onChange={e => handleFile(e.target.files[0])} />
+        <input id="siti-csv" type="file" accept=".csv" style={{ display: "none" }} onChange={e => handleFile(e.target.files[0])} />
       </div>
 
       {status && (
-        <div style={{ padding: "10px 14px", borderRadius: 8, background: sc + "15", border: `1px solid ${sc}33`, color: sc, fontSize: 13 }}>
+        <div style={{ padding: "10px 14px", borderRadius: 8, background: sc + "12", border: `1px solid ${sc}30`, color: sc, fontSize: 13, lineHeight: 1.6 }}>
           {status.msg}
+          {status.smsResult && (
+            <div style={{ marginTop: 6, fontSize: 11, color: status.smsResult.sent ? C.emerald : C.coral }}>
+              {status.smsResult.sent
+                ? `📱 SMS alert sent (SID: ${status.smsResult.sid})`
+                : `📱 SMS alert not sent: ${status.smsResult.reason}`}
+            </div>
+          )}
         </div>
       )}
 
       {file && (
-        <button onClick={handleUpload} disabled={uploading}
-          style={{
-            background: uploading ? C.dim : C.accent, border: "none", borderRadius: 10,
-            padding: "14px", color: "white", fontSize: 14, fontWeight: 600,
-            cursor: uploading ? "not-allowed" : "pointer", fontFamily: "inherit", transition: "all 0.2s"
-          }}>
-          {uploading ? "Processing Dataset..." : "Run Kernel Analysis →"}
+        <button onClick={upload} disabled={uploading}
+          style={{ background: uploading ? C.dim : C.accent, border: "none", borderRadius: 10, padding: "13px", color: "white", fontSize: 14, fontWeight: 600, cursor: uploading ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+          {uploading ? "Running MIMI Kernel Analysis…" : "Run Kernel Analysis →"}
         </button>
-      )}
-
-      {result && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          {[
-            { label: "Total Rows",      value: result.total_rows?.toLocaleString() || "—" },
-            { label: "Hubs Scanned",    value: result.hub_count || "—" },
-            { label: "Critical Hubs",   value: result.hubs?.filter(h => h.risk === "critical").length ?? 0 },
-          ].map((s, i) => (
-            <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px", textAlign: "center" }}>
-              <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 6 }}>{s.label}</div>
-              <div style={{ color: C.text, fontSize: 22, fontWeight: 700, fontFamily: "JetBrains Mono, monospace" }}>{s.value}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {result?.hubs?.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Hub Analysis Results</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-            {result.hubs.slice(0, 6).map((hub, i) => (
-              <HubCard key={i} hub={hub} />
-            ))}
-          </div>
-        </div>
       )}
     </div>
   );
 }
 
-// ── API Key Card ──────────────────────────────────────────────────────────────
-function APIKeyCard({ apiKey }) {
-  const [revealed, setRevealed] = useState(false);
-  const [copied, setCopied]     = useState(false);
-  const copy = () => { navigator.clipboard.writeText(apiKey); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+// ── Dashboard Tab ─────────────────────────────────────────────────────────────
+function DashboardTab({ keyInfo }) {
+  const [data, setData]     = useState(null);
+  const [loading, setLoad]  = useState(false);
+  const [error, setErr]     = useState(null);
+  const timerRef            = useRef(null);
+
+  const fetch_ = useCallback(async () => {
+    if (!getStoredKey()) return;
+    setLoad(true);
+    try {
+      const d = await apiCall("/api/kernel/status");
+      setData(d); setErr(null);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoad(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetch_();
+    timerRef.current = setInterval(fetch_, 10_000);
+    return () => clearInterval(timerRef.current);
+  }, [fetch_]);
+
+  const hubs   = data?.hubs || [];
+  const critCt = hubs.filter(h => h.risk === "critical").length;
+  const warnCt = hubs.filter(h => h.risk === "warning").length;
+
+  if (!getStoredKey()) {
+    return (
+      <div style={{ maxWidth: 600, margin: "60px auto", textAlign: "center" }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>🔑</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: C.text, marginBottom: 8 }}>API key required</div>
+        <div style={{ color: C.muted, fontSize: 14, marginBottom: 24 }}>Enter your API key in the <strong style={{ color: C.accentLt }}>API Keys</strong> tab to access the live dashboard.</div>
+        <button onClick={() => window.dispatchEvent(new CustomEvent("siti-tab", { detail: "keys" }))}
+          style={{ background: C.accent, border: "none", borderRadius: 10, padding: "12px 28px", color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+          Enter API Key →
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>Your API Key</div>
-        <Badge label="Active" color={C.emerald} />
+    <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h1 style={{ fontSize: 26, fontWeight: 800, margin: "0 0 6px", letterSpacing: "-0.5px" }}>The Inverse Reliability Paradox</h1>
+          <p style={{ color: C.muted, fontSize: 14, margin: 0, lineHeight: 1.8, maxWidth: 580 }}>
+            SITI predicts logistics cascade failure before it begins — Kalman filtering + M/M/1 queueing theory.
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: loading ? C.amber : error ? C.coral : C.emerald }} />
+          <span style={{ color: C.muted, fontSize: 12 }}>{loading ? "Refreshing…" : error ? "Error" : "Live · 10s"}</span>
+          <button onClick={fetch_} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 12px", color: C.muted, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}>↻</button>
+        </div>
       </div>
-      <div style={{
-        background: C.surface, border: `1px solid ${C.borderHi}`, borderRadius: 8,
-        padding: "12px 14px", fontFamily: "JetBrains Mono, monospace", fontSize: 13,
-        color: revealed ? C.accentLt : C.muted, letterSpacing: revealed ? "0.5px" : "4px", userSelect: revealed ? "text" : "none"
-      }}>
-        {revealed ? apiKey : "●".repeat(32)}
+
+      {error && (
+        <div style={{ padding: "10px 14px", background: C.coral + "12", border: `1px solid ${C.coral}30`, borderRadius: 10, color: C.coral, fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+        <StatCard label="Total Shipments" value={data?.total_rows?.toLocaleString() || "—"} sub="Upload CSV to analyze" color={C.accentLt} loading={loading && !data} />
+        <StatCard label="Critical Hubs"   value={critCt || "—"} sub={`${warnCt} warning hubs`} color={critCt > 0 ? C.coral : C.emerald} loading={loading && !data} />
+        <StatCard label="Total Leakage"   value={data ? `$${data.total_leakage?.toFixed(0) || 0}` : "—"} sub="High-importance late × $3.94" color={C.coral} loading={loading && !data} />
+        <StatCard label="Annualized Exposure" value="$2.81M" sub="IRP baseline recovery target" color={C.amber} />
       </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <button onClick={() => setRevealed(r => !r)}
-          style={{ flex: 1, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-          {revealed ? "Hide Key" : "Reveal Key"}
-        </button>
-        <button onClick={copy}
-          style={{ flex: 1, background: copied ? C.emerald + "20" : C.accent + "20", border: `1px solid ${copied ? C.emerald : C.accent}50`, borderRadius: 8, padding: "9px", color: copied ? C.emerald : C.accentLt, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-          {copied ? "Copied!" : "Copy"}
-        </button>
-      </div>
-      <div style={{ marginTop: 14, padding: "12px 14px", background: C.surface, borderRadius: 8 }}>
-        <div style={{ color: C.muted, fontSize: 11, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>Usage</div>
-        <pre style={{ margin: 0, fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: C.accentLt, whiteSpace: "pre-wrap" }}>
-{`fetch("${API_BASE}/api/hubs", {
-  headers: { "X-API-Key": "${revealed ? apiKey : "YOUR_KEY"}" }
-})`}
-        </pre>
-      </div>
+
+      {hubs.length > 0 ? (
+        <>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 14 }}>
+              Hub Network — {hubs.length} hubs monitored
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+              {hubs.map((hub, i) => <HubCard key={i} hub={hub} />)}
+            </div>
+          </div>
+          <Card>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>Summary Statistics</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
+              {[
+                { k: "Global Avg ρ",    v: data?.global_rho?.toFixed(4), c: data?.global_rho > 0.85 ? C.coral : data?.global_rho > 0.70 ? C.amber : C.emerald },
+                { k: "Total Late",      v: data?.total_late?.toLocaleString(), c: C.coral },
+                { k: "Hi-Imp Late",     v: data?.total_high_imp_late?.toLocaleString(), c: C.coral },
+                { k: "Total Leakage",   v: `$${data?.total_leakage?.toFixed(2)}`, c: C.amber },
+                { k: "Dataset",         v: data?.dataset_name, c: C.muted },
+                { k: "Last Reset",      v: data?.reset_at?.slice(0, 16).replace("T", " "), c: C.muted },
+              ].map((s, i) => (
+                <div key={i} style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>{s.k}</div>
+                  <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 13, fontWeight: 600, color: s.c, wordBreak: "break-all" }}>{s.v || "—"}</div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </>
+      ) : !loading && !error && (
+        <Card style={{ textAlign: "center", padding: "50px 24px" }}>
+          <div style={{ fontSize: 42, marginBottom: 14 }}>📦</div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 8 }}>No dataset loaded</div>
+          <div style={{ color: C.muted, fontSize: 14, marginBottom: 20 }}>Upload a logistics CSV to run the MIMI Kernel analysis</div>
+          <button onClick={() => window.dispatchEvent(new CustomEvent("siti-tab", { detail: "upload" }))}
+            style={{ background: C.accent, border: "none", borderRadius: 10, padding: "11px 24px", color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            Upload Dataset →
+          </button>
+        </Card>
+      )}
+
+      <Card>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>The Mathematics</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+          {[
+            { label: "Load Factor ρ",   formula: "λ / μ",           color: C.coral,    desc: "Arrival rate over service rate. ρ ≥ 0.85 triggers sigmoidal decay." },
+            { label: "Sigmoidal Φ(ρ)",  formula: "1/(1+e⁻²⁰(ρ-0.85))", color: C.amber, desc: "Instability function — models sudden collapse at saturation threshold." },
+            { label: "IRP Score",       formula: "Φ(ρ)·ln(N+1)",    color: C.accentLt, desc: "Inverse Reliability Paradox — high-value shipments hit worst delays." },
+            { label: "Kalman Gain K",   formula: "P⁻/(P⁻+R)",       color: C.teal,     desc: "Optimal blend of prediction uncertainty and observation noise for T+3 forecast." },
+          ].map((m, i) => (
+            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px" }}>
+              <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>{m.label}</div>
+              <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 20, color: m.color, fontWeight: 600, marginBottom: 8 }}>{m.formula}</div>
+              <div style={{ color: C.muted, fontSize: 12, lineHeight: 1.6 }}>{m.desc}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
     </div>
   );
 }
 
 // ── Pricing Card ──────────────────────────────────────────────────────────────
 function PricingCard({ plan, onBuy }) {
+  const [busy, setBusy] = useState(false);
+  const click = async () => {
+    setBusy(true);
+    try { await onBuy(plan); } finally { setBusy(false); }
+  };
   return (
-    <div
-      style={{
-        background: plan.recommended ? C.card : C.surface,
-        border: `1.5px solid ${plan.recommended ? plan.color : C.border}`,
-        borderRadius: 18, padding: "28px 24px", position: "relative", overflow: "hidden",
-        boxShadow: plan.recommended ? `0 0 40px ${plan.color}20` : "none",
-        transition: "transform 0.2s, box-shadow 0.2s"
-      }}
-      onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-4px)"; e.currentTarget.style.boxShadow = `0 12px 48px ${plan.color}25`; }}
-      onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = plan.recommended ? `0 0 40px ${plan.color}20` : "none"; }}
-    >
+    <div style={{
+      background: plan.recommended ? C.card : C.surface,
+      border: `1.5px solid ${plan.recommended ? plan.color : C.border}`,
+      borderRadius: 18, padding: "28px 22px", position: "relative", overflow: "hidden",
+      boxShadow: plan.recommended ? `0 0 40px ${plan.color}18` : "none",
+      transition: "transform 0.2s",
+    }}
+      onMouseEnter={e => e.currentTarget.style.transform = "translateY(-4px)"}
+      onMouseLeave={e => e.currentTarget.style.transform = ""}>
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: plan.color }} />
       {plan.recommended && (
-        <div style={{ position: "absolute", top: 16, right: 16, background: plan.color + "25", color: plan.color, border: `1px solid ${plan.color}50`, borderRadius: 20, padding: "3px 10px", fontSize: 10, fontWeight: 700, letterSpacing: "0.5px" }}>
-          RECOMMENDED
+        <div style={{ position: "absolute", top: 14, right: 14, background: plan.color + "25", color: plan.color, border: `1px solid ${plan.color}50`, borderRadius: 20, padding: "3px 10px", fontSize: 10, fontWeight: 700 }}>
+          MOST POPULAR
         </div>
       )}
-      <div style={{ color: plan.color, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6 }}>{plan.name}</div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 4 }}>
-        <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 32, fontWeight: 700, color: C.text }}>{plan.priceLabel}</span>
+      <div style={{ color: plan.color, fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 8 }}>{plan.name}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginBottom: 6 }}>
+        <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 30, fontWeight: 700, color: C.text }}>{plan.priceLabel}</span>
         <span style={{ color: C.muted, fontSize: 13 }}>{plan.period}</span>
       </div>
+      <div style={{ color: plan.color, fontSize: 12, fontWeight: 600, marginBottom: 4 }}>🎫 {plan.credits}</div>
       <div style={{ color: C.muted, fontSize: 12, marginBottom: 16, fontStyle: "italic" }}>{plan.tagline}</div>
-      <div style={{ color: C.muted, fontSize: 12, marginBottom: 20, paddingBottom: 20, borderBottom: `1px solid ${C.border}` }}>
-        {plan.calls} · {plan.hubs} · {plan.sms}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22, paddingBottom: 22, borderBottom: `1px solid ${C.border}` }}>
         {plan.features.map((f, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-            <span style={{ color: plan.color, fontSize: 13, marginTop: 1, flexShrink: 0 }}>✓</span>
-            <span style={{ color: C.muted, fontSize: 13, lineHeight: 1.5 }}>{f}</span>
+          <div key={i} style={{ display: "flex", gap: 8 }}>
+            <span style={{ color: plan.color, fontSize: 13, flexShrink: 0 }}>✓</span>
+            <span style={{ color: C.muted, fontSize: 13 }}>{f}</span>
           </div>
         ))}
       </div>
-      <button onClick={() => onBuy(plan)}
-        style={{
-          width: "100%", background: plan.recommended ? plan.color : "transparent",
-          border: `1.5px solid ${plan.color}`, borderRadius: 10, padding: "13px",
-          color: plan.recommended ? "white" : plan.color, fontSize: 14, fontWeight: 600,
-          cursor: "pointer", fontFamily: "inherit", transition: "all 0.2s"
-        }}
-        onMouseEnter={e => { if (!plan.recommended) e.currentTarget.style.background = plan.color + "20"; }}
-        onMouseLeave={e => { if (!plan.recommended) e.currentTarget.style.background = "transparent"; }}>
-        {plan.cta}
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 14, background: C.surface, borderRadius: 8, padding: "8px 10px", lineHeight: 1.6 }}>
+        🔒 API key delivered via <strong style={{ color: C.text }}>WhatsApp</strong> after payment confirmation.
+      </div>
+      <button onClick={click} disabled={busy}
+        style={{ width: "100%", background: plan.recommended ? plan.color : "transparent", border: `1.5px solid ${plan.color}`, borderRadius: 10, padding: "12px", color: plan.recommended ? "white" : plan.color, fontSize: 14, fontWeight: 600, cursor: busy ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: busy ? 0.7 : 1 }}>
+        {busy ? "Processing…" : plan.cta}
       </button>
-    </div>
-  );
-}
-
-// ── Contact Section ───────────────────────────────────────────────────────────
-function ContactSection() {
-  const [name, setName]       = useState("");
-  const [company, setCompany] = useState("");
-  const [message, setMessage] = useState("");
-
-  const sendToWhatsApp = () => {
-    const msg = encodeURIComponent(
-      `Hi! I'm ${name || "a logistics professional"} from ${company || "a logistics company"}.\n\n${message || "I'd like to know more about SITI Intelligence."}\n\n— via SITI Intelligence website`
-    );
-    window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
-  };
-
-  const inputStyle = {
-    width: "100%", background: C.surface, border: `1px solid ${C.border}`,
-    borderRadius: 8, padding: "10px 14px", color: C.text, fontSize: 13,
-    fontFamily: "inherit", outline: "none", boxSizing: "border-box"
-  };
-
-  return (
-    <div style={{ maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={{ textAlign: "center" }}>
-        <h2 style={{ fontSize: 28, fontWeight: 800, margin: "0 0 8px" }}>Get in Touch</h2>
-        <p style={{ color: C.muted, fontSize: 14, margin: 0 }}>Response within 2 hours on WhatsApp.</p>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, flexWrap: "wrap" }}>
-        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "24px", display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Send a message</div>
-          {[
-            { label: "Your Name",   val: name,    set: setName,    ph: "Priya Sharma" },
-            { label: "Company",     val: company, set: setCompany, ph: "Safexpress / Gati / Your 3PL" },
-          ].map(({ label, val, set, ph }) => (
-            <div key={label}>
-              <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>{label}</div>
-              <input value={val} onChange={e => set(e.target.value)} placeholder={ph} style={inputStyle} />
-            </div>
-          ))}
-          <div>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Message</div>
-            <textarea value={message} onChange={e => setMessage(e.target.value)}
-              placeholder="I want to run SITI on our shipment data..." rows={4}
-              style={{ ...inputStyle, resize: "vertical" }} />
-          </div>
-          <button onClick={sendToWhatsApp}
-            style={{ background: "#25D366", border: "none", borderRadius: 10, padding: "13px", color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-            💬 Send via WhatsApp
-          </button>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {[
-            { icon: "💬", title: "WhatsApp (Fastest)", desc: "Within 2 hours, 9AM–9PM IST", action: "Chat Now", color: "#25D366", href: `https://wa.me/${WA_NUMBER}?text=${WA_SUPPORT_MSG}` },
-            { icon: "📧", title: "Email", desc: "support@siti-intelligence.io — 24h", action: "Send Email", color: C.accentLt, href: "mailto:support@siti-intelligence.io?subject=SITI Enquiry" },
-            { icon: "🏢", title: "Enterprise Demo", desc: "30-min live demo for your ops team", action: "Book Demo", color: C.amber, href: `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent("Hi! I'd like to book a live demo of SITI Intelligence for our enterprise team.")}` },
-          ].map((item, i) => (
-            <a key={i} href={item.href} target="_blank" rel="noreferrer"
-              style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "18px", display: "flex", gap: 14, alignItems: "center", textDecoration: "none", transition: "border-color 0.2s, transform 0.2s" }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = item.color + "66"; e.currentTarget.style.transform = "translateY(-2px)"; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.transform = ""; }}>
-              <span style={{ fontSize: 28, flexShrink: 0 }}>{item.icon}</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 3 }}>{item.title}</div>
-                <div style={{ fontSize: 12, color: C.muted }}>{item.desc}</div>
-              </div>
-              <span style={{ color: item.color, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>{item.action} →</span>
-            </a>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Dashboard Tab — Live Kernel Data ──────────────────────────────────────────
-function DashboardTab() {
-  const [kernelData, setKernelData] = useState(null);
-  const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState(null);
-  const intervalRef = useRef(null);
-
-  const fetchKernel = useCallback(async () => {
-    try {
-      const data = await apiCall("/api/kernel/status");
-      setKernelData(data);
-      setError(null);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchKernel();
-    intervalRef.current = setInterval(fetchKernel, 8000); // refresh every 8s
-    return () => clearInterval(intervalRef.current);
-  }, [fetchKernel]);
-
-  const hubs    = kernelData?.hubs || [];
-  const critCt  = hubs.filter(h => h.risk === "critical").length;
-  const warnCt  = hubs.filter(h => h.risk === "warning").length;
-  const avgRho  = hubs.length > 0 ? (hubs.reduce((a, h) => a + h.rho, 0) / hubs.length).toFixed(4) : "—";
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <h1 style={{ fontSize: 28, fontWeight: 800, margin: "0 0 8px", letterSpacing: "-0.5px" }}>The Inverse Reliability Paradox</h1>
-          <p style={{ color: C.muted, fontSize: 14, margin: 0, lineHeight: 1.8, maxWidth: 600 }}>
-            At 100M+ shipments, traditional tracking breaks structurally.
-            SITI predicts network failure before cascade using Kalman filtering + M/M/1 queueing theory.
-          </p>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: loading ? C.amber : error ? C.coral : C.emerald }} />
-          <span style={{ color: C.muted, fontSize: 12 }}>{loading ? "Connecting..." : error ? "Error" : "Live"}</span>
-          <button onClick={fetchKernel}
-            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", color: C.muted, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-            ↻ Refresh
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <div style={{ padding: "12px 16px", background: C.coral + "15", border: `1px solid ${C.coral}33`, borderRadius: 10, color: C.coral, fontSize: 13 }}>
-          Backend error: {error} — <a href={`${API_BASE}/health`} target="_blank" rel="noreferrer" style={{ color: C.coral }}>Check health</a>
-        </div>
-      )}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
-        <StatCard label="Total Shipments"   value={kernelData?.total_rows?.toLocaleString() || "—"}   sub="Upload CSV to analyze" color={C.accentLt} loading={loading} />
-        <StatCard label="Network Avg ρ"     value={avgRho}                                             sub={`${critCt} critical, ${warnCt} warning`} color={critCt > 0 ? C.coral : C.emerald} loading={loading} />
-        <StatCard label="Annualized Exposure" value="$2.81M"                                           sub="IRP baseline recovery target" color={C.coral} />
-        <StatCard label="Hub Count"         value={kernelData?.hub_count || (loading ? null : "0")}    sub="Active monitored hubs" color={C.teal} loading={loading} />
-      </div>
-
-      {hubs.length > 0 ? (
-        <>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 14, color: C.text }}>Hub Network Status</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
-              {hubs.map((hub, i) => <HubCard key={i} hub={hub} />)}
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, flexWrap: "wrap" }}>
-            <PieChart
-              title="Risk Distribution" subtitle="By hub utilization"
-              data={[hubs.filter(h => h.risk === "safe").length, warnCt, critCt]}
-              labels={["Safe (ρ < 0.70)", "Warning (ρ 0.70–0.85)", "Critical (ρ ≥ 0.85)"]}
-              colors={[C.emerald, C.amber, C.coral]}
-            />
-            <PieChart
-              title="Delay Profile" subtitle="Across all hubs"
-              data={[
-                hubs.reduce((a, h) => a + (h.on_time || 0), 0),
-                hubs.reduce((a, h) => a + (h.late || 0), 0),
-              ]}
-              labels={["On-time", "Late"]}
-              colors={[C.emerald, C.coral]}
-            />
-            <PieChart
-              title="IRP Exposure" subtitle="By risk category"
-              data={[
-                Math.round(hubs.filter(h => h.risk === "safe").length / Math.max(hubs.length, 1) * 100),
-                Math.round(warnCt / Math.max(hubs.length, 1) * 100),
-                Math.round(critCt / Math.max(hubs.length, 1) * 100),
-              ]}
-              labels={["Safe %", "Warning %", "Critical %"]}
-              colors={[C.emerald, C.amber, C.coral]}
-            />
-          </div>
-        </>
-      ) : !loading && !error && (
-        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "40px", textAlign: "center" }}>
-          <div style={{ fontSize: 36, marginBottom: 16 }}>📦</div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: C.text, marginBottom: 8 }}>No data loaded yet</div>
-          <div style={{ color: C.muted, fontSize: 14, marginBottom: 20 }}>Upload a CSV in the Dataset tab to run the MIMI Kernel analysis</div>
-          <button style={{ background: C.accent, border: "none", borderRadius: 10, padding: "12px 24px", color: "white", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
-            onClick={() => window.dispatchEvent(new CustomEvent("siti-tab", { detail: "upload" }))}>
-            Upload Dataset →
-          </button>
-        </div>
-      )}
-
-      <div style={{ background: C.card, border: `1px solid ${C.accent}30`, borderRadius: 14, padding: "20px" }}>
-        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>The Mathematics Behind SITI</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-          {[
-            { label: "Load Factor ρ", formula: "λ / μ", color: C.coral, desc: "Arrival rate λ divided by service rate μ. When ρ > 0.85, hub is overloaded and sigmoidal decay triggers." },
-            { label: "IRP Score", formula: "Φ(ρ) · ln(N+1)", color: C.accentLt, desc: "At scale N, phi-weighted log term captures non-linear reliability degradation unique to high-importance shipments." },
-            { label: "Kalman Gain K", formula: "P⁻ / (P⁻ + R)", color: C.teal, desc: "Optimal state estimate blending prediction uncertainty P with observation noise R. T+3 forecast via random-walk model." },
-          ].map((m, i) => (
-            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "18px" }}>
-              <div style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>{m.label}</div>
-              <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 22, color: m.color, fontWeight: 500, marginBottom: 10 }}>{m.formula}</div>
-              <div style={{ color: C.muted, fontSize: 12, lineHeight: 1.7 }}>{m.desc}</div>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
-  const [tab, setTab]               = useState("dashboard");
-  const [kernelStatus, setStatus]   = useState("Connecting");
-  const [purchasedKey, setPKey]     = useState(null);
-  const [paymentStatus, setPayStat] = useState(null);
+  const [tab, setTab]           = useState("dashboard");
+  const [healthStatus, setHs]   = useState("Checking");
+  const [keyInfo, setKeyInfo]   = useState(null);    // set after key verification
+  const [uploadResult, setUpRes]= useState(null);
+  const [payStatus, setPayStat] = useState(null);
 
-  // Listen for tab change events from child components
+  // Key already in session?
   useEffect(() => {
-    const handler = e => setTab(e.detail);
-    window.addEventListener("siti-tab", handler);
-    return () => window.removeEventListener("siti-tab", handler);
+    const k = getStoredKey();
+    if (k) {
+      apiCall("/api/keys/info", {}, k)
+        .then(info => setKeyInfo(info))
+        .catch(() => clearStoredKey());
+    }
   }, []);
 
-  // Check kernel health on mount
+  // Health check
   useEffect(() => {
     fetch(`${API_BASE}/health`)
-      .then(r => r.ok ? setStatus("Online") : setStatus("Degraded"))
-      .catch(() => setStatus("Offline"));
+      .then(r => r.ok ? setHs("Online") : setHs("Degraded"))
+      .catch(() => setHs("Offline"));
   }, []);
 
-  // Check for payment return (Cashfree redirect)
+  // Tab event listener
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("payment") === "success") {
-      setPKey(`siti-pilot-${Date.now().toString(36).toUpperCase()}`);
-      setPayStat({ plan: params.get("plan") || "pilot" });
+    const h = e => setTab(e.detail);
+    window.addEventListener("siti-tab", h);
+    return () => window.removeEventListener("siti-tab", h);
+  }, []);
+
+  // Payment return
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("payment") === "success") {
+      setPayStat({ plan: p.get("plan"), order: p.get("order_id") });
       setTab("keys");
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
 
-  // BUG-008 FIX: Proper payment handler with Cashfree order creation
+  // Payment handler
   const handleBuy = async (plan) => {
-    if (plan.id === "enterprise" || plan.priceNum === null) {
-      const msg = encodeURIComponent(
-        `Hi! I'm interested in SITI Intelligence Enterprise plan (₹75,000+/month). Please share details.`
-      );
-      window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
+    if (!plan.priceNum) {
+      window.open(`https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(`Hi! I'm interested in SITI Intelligence Enterprise plan (₹75,000+/month). Please share details.`)}`, "_blank");
       return;
     }
-
+    const key = getStoredKey();
+    if (!key) {
+      alert("Please enter your demo API key first (in the API Keys tab) to initiate payment.");
+      setTab("keys");
+      return;
+    }
     try {
-      const orderData = await apiCall("/api/payments/create-order", {
+      const order = await apiCall("/api/payments/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plan: plan.id, amount: plan.priceNum }),
       });
 
-      if (orderData.fallback && orderData.whatsapp_url) {
-        // Cashfree not configured — use WhatsApp fallback
-        window.open(orderData.whatsapp_url, "_blank");
+      if (order.fallback && order.whatsapp_url) {
+        window.open(order.whatsapp_url, "_blank");
         return;
       }
 
-      if (orderData.payment_session_id) {
-        // Load Cashfree SDK and launch checkout
-        const loaded = await new Promise(resolve => {
-          if (window.Cashfree) return resolve(true);
+      if (order.payment_session_id) {
+        const loaded = await new Promise(res => {
+          if (window.Cashfree) return res(true);
           const s = document.createElement("script");
           s.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
-          s.onload = () => resolve(true);
-          s.onerror = () => resolve(false);
+          s.onload = () => res(true);
+          s.onerror = () => res(false);
           document.head.appendChild(s);
         });
-
         if (loaded && window.Cashfree) {
-          const cf = new window.Cashfree({ mode: "production" });
-          cf.checkout({
-            paymentSessionId: orderData.payment_session_id,
-            returnUrl: `${window.location.origin}?payment=success&plan=${plan.id}`,
+          new window.Cashfree({ mode: "production" }).checkout({
+            paymentSessionId: order.payment_session_id,
+            returnUrl: `${window.location.origin}?payment=success&plan=${plan.id}&order_id=${order.order_id}`,
           });
           return;
         }
       }
     } catch (e) {
-      console.error("Payment error:", e);
+      console.error("Payment:", e);
     }
-
-    // Final fallback — always show WhatsApp for payment
-    const msg = encodeURIComponent(
-      `Hi! I want to purchase SITI Intelligence ${plan.name} plan (${plan.priceLabel}/month). Please help me complete the payment.`
-    );
-    window.open(`https://wa.me/${WA_NUMBER}?text=${msg}`, "_blank");
+    // Always-works fallback
+    window.open(`https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(`Hi! I want to buy SITI Intelligence ${plan.name} (${plan.priceLabel}/month).`)}`, "_blank");
   };
 
+  const hc = healthStatus === "Online" ? C.emerald : healthStatus === "Offline" ? C.coral : C.amber;
   const TABS = [
     { id: "dashboard", label: "Dashboard" },
     { id: "upload",    label: "Dataset" },
     { id: "pricing",   label: "Pricing" },
-    { id: "keys",      label: "API Keys" },
+    { id: "keys",      label: keyInfo ? `Keys · ${keyInfo.plan?.toUpperCase()}` : "API Keys" },
     { id: "docs",      label: "Docs" },
-    { id: "contact",   label: "Contact" },
   ];
-
-  const statusColor = kernelStatus === "Online" ? C.emerald : kernelStatus === "Offline" ? C.coral : C.amber;
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'Syne', sans-serif" }}>
       <style>{FONTS}</style>
 
-      {/* Navbar */}
-      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100 }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 24px", display: "flex", alignItems: "center", height: 58, gap: 20 }}>
+      {/* Nav */}
+      <nav style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 100, backdropFilter: "blur(10px)" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 24px", display: "flex", alignItems: "center", height: 56, gap: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, background: `linear-gradient(135deg, ${C.accent} 0%, ${C.teal} 100%)`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 14 }}>S</div>
-            <span style={{ fontWeight: 800, fontSize: 16, letterSpacing: "-0.3px" }}>SITI Intelligence</span>
-            <span style={{ color: C.muted, fontSize: 11, fontFamily: "JetBrains Mono, monospace" }}>v4.0</span>
+            <div style={{ width: 28, height: 28, borderRadius: 8, background: `linear-gradient(135deg, ${C.accent}, ${C.teal})`, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, color: "white" }}>S</div>
+            <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: "-0.3px" }}>SITI Intelligence</span>
+            <span style={{ color: C.muted, fontSize: 10, fontFamily: "JetBrains Mono, monospace" }}>v5.0</span>
           </div>
           <div style={{ display: "flex", gap: 2, flex: 1, overflowX: "auto" }}>
             {TABS.map(t => (
               <button key={t.id} onClick={() => setTab(t.id)} style={{
-                background: tab === t.id ? C.accent + "20" : "transparent",
-                border: "none", borderBottom: `2px solid ${tab === t.id ? C.accent : "transparent"}`,
-                color: tab === t.id ? C.accentLt : C.muted,
-                padding: "10px 14px", fontSize: 13, cursor: "pointer", fontFamily: "inherit",
-                fontWeight: tab === t.id ? 600 : 400, transition: "all 0.15s", whiteSpace: "nowrap"
+                background: tab === t.id ? C.accent + "18" : "transparent", border: "none",
+                borderBottom: `2px solid ${tab === t.id ? C.accent : "transparent"}`,
+                color: tab === t.id ? C.accentLt : C.muted, padding: "8px 14px", fontSize: 13,
+                cursor: "pointer", fontFamily: "inherit", fontWeight: tab === t.id ? 600 : 400, whiteSpace: "nowrap"
               }}>{t.label}</button>
             ))}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-            <a href={`https://wa.me/${WA_NUMBER}?text=${WA_SUPPORT_MSG}`} target="_blank" rel="noreferrer"
-              style={{ background: "#25D366", border: "none", borderRadius: 8, padding: "6px 14px", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer", textDecoration: "none", display: "flex", alignItems: "center", gap: 5 }}>
-              💬 WhatsApp
+            <a href={`https://wa.me/${WA_NUMBER}?text=${WA_MSG}`} target="_blank" rel="noreferrer"
+              style={{ background: "#25D366", border: "none", borderRadius: 8, padding: "6px 12px", color: "white", fontSize: 12, fontWeight: 600, textDecoration: "none" }}>
+              💬 Support
             </a>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: statusColor }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor", display: "inline-block" }} />
-              {kernelStatus}
+            <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: hc }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "currentColor" }} />
+              {healthStatus}
             </div>
           </div>
         </div>
-      </div>
+      </nav>
 
-      {/* Page Content */}
+      {/* Content */}
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: "28px 24px" }}>
 
-        {tab === "dashboard" && <DashboardTab />}
+        {tab === "dashboard" && <DashboardTab keyInfo={keyInfo} />}
 
         {tab === "upload" && (
           <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
             <div>
-              <h2 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>Dataset Upload</h2>
-              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>
-                Upload any logistics CSV. Kaggle e-commerce, Delhivery, and custom 3PL formats are auto-mapped.
-              </p>
+              <h2 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 6px" }}>Dataset Upload</h2>
+              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>Upload any logistics CSV — Kaggle, Delhivery, or custom format. Columns are auto-mapped.</p>
             </div>
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "24px" }}>
-              <CSVUploadPanel />
-            </div>
-            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px" }}>
-              <div style={{ color: C.amber, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 12 }}>Auto-detected column mappings</div>
+            {!getStoredKey() && (
+              <div style={{ padding: "12px 16px", background: C.amber + "12", border: `1px solid ${C.amber}33`, borderRadius: 10, color: C.amber, fontSize: 13 }}>
+                ⚠ Enter your API key in the <strong>API Keys</strong> tab before uploading.
+              </div>
+            )}
+            <Card>
+              <CSVUploadPanel onResult={r => { setUpRes(r); setTab("dashboard"); }} />
+            </Card>
+            <Card>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 10 }}>Auto-mapped columns</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {[
-                  { siti: "hub_id",       kaggle: "Warehouse_block, block, hub, depot, zone" },
-                  { siti: "arrival_rate", kaggle: "lambda, arrival_count, volume (auto-synthesized)" },
-                  { siti: "service_rate", kaggle: "mu, capacity, throughput (auto-synthesized)" },
-                  { siti: "shipment_id",  kaggle: "ID, order_id, awb, tracking_no" },
-                ].map((c, i) => (
-                  <div key={i} style={{ background: C.card, borderRadius: 8, padding: "12px 14px" }}>
-                    <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: C.accentLt, marginBottom: 4 }}>SITI: {c.siti}</div>
-                    <div style={{ color: C.muted, fontSize: 11 }}>Maps: {c.kaggle}</div>
+                  ["hub_id",       "Warehouse_block, block, hub, depot, zone"],
+                  ["arrival_rate", "auto-synthesized from row distribution"],
+                  ["service_rate", "auto-synthesized from hub count"],
+                  ["on_time",      "Reached.on.Time_Y.N, delivery_status"],
+                ].map(([siti, maps], i) => (
+                  <div key={i} style={{ background: C.surface, borderRadius: 8, padding: "10px 12px" }}>
+                    <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: C.accentLt, marginBottom: 4 }}>SITI: {siti}</div>
+                    <div style={{ color: C.muted, fontSize: 11 }}>{maps}</div>
                   </div>
                 ))}
               </div>
-            </div>
+            </Card>
           </div>
         )}
 
         {tab === "pricing" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
             <div style={{ textAlign: "center" }}>
-              <h2 style={{ fontSize: 28, fontWeight: 800, margin: "0 0 8px" }}>API Access Pricing</h2>
-              <p style={{ color: C.muted, fontSize: 14, margin: 0 }}>Value-based pricing for Indian 3PLs. No contracts.</p>
+              <h2 style={{ fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>API Access Pricing</h2>
+              <p style={{ color: C.muted, fontSize: 14, margin: 0 }}>Credit-based. No contracts. Cancel anytime. Key delivered via WhatsApp.</p>
             </div>
-            <div style={{ background: C.emerald + "10", border: `1px solid ${C.emerald}30`, borderRadius: 14, padding: "20px 24px", display: "flex", alignItems: "center", gap: 24 }}>
-              <div style={{ fontSize: 32 }}>📊</div>
-              <div style={{ flex: 1 }}>
+
+            {/* ROI callout */}
+            <div style={{ background: C.emerald + "0e", border: `1px solid ${C.emerald}28`, borderRadius: 14, padding: "18px 22px", display: "flex", gap: 20, alignItems: "center" }}>
+              <span style={{ fontSize: 30 }}>📊</span>
+              <div>
                 <div style={{ color: C.emerald, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>The ROI Calculation</div>
                 <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.7 }}>
-                  A 3PL with 50,000 shipments/month at 12% delay rate saves approximately{" "}
-                  <span style={{ color: C.text, fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>₹{ROI_SAVINGS.toLocaleString()}/month</span>{" "}
-                  with a 15% delay reduction. Growth plan costs ₹45,999.{" "}
-                  <span style={{ color: C.emerald, fontWeight: 700 }}>7× ROI on month one.</span>
+                  50K shipments/month × 12% delay rate × ₹1,200/shipment × 15% reduction ={" "}
+                  <strong style={{ color: C.text }}>₹{Math.round(50000 * 0.12 * 1200 * 0.15).toLocaleString()}/month saved</strong>.
+                  Growth plan costs ₹45,999. That's <span style={{ color: C.emerald, fontWeight: 700 }}>7× ROI on day one.</span>
                 </div>
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18 }}>
-              {PLANS.map(plan => <PricingCard key={plan.id} plan={plan} onBuy={handleBuy} />)}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+              {PLANS.map(p => <PricingCard key={p.id} plan={p} onBuy={handleBuy} />)}
             </div>
-            <div style={{ background: C.surface, borderRadius: 12, padding: "18px 24px", border: `1px solid ${C.border}`, display: "flex", gap: 20, alignItems: "center" }}>
-              <div style={{ fontSize: 24 }}>🔒</div>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4 }}>Secure payments via Cashfree</div>
-                <div style={{ color: C.muted, fontSize: 13 }}>
-                  PCI-DSS compliant. UPI, cards, net banking, wallets. API key generated instantly on payment. Enterprise clients routed to WhatsApp for custom pricing.
-                </div>
+
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 22px", display: "flex", gap: 16, alignItems: "center" }}>
+              <span style={{ fontSize: 22 }}>🔒</span>
+              <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.7 }}>
+                <strong style={{ color: C.text }}>Secure payment via Cashfree.</strong> PCI-DSS compliant. UPI, cards, net banking, wallets.
+                API key generated instantly and delivered to your <strong style={{ color: C.text }}>WhatsApp</strong> — not email, for reliability.
+                Raw key is <strong style={{ color: C.text }}>never shown in the frontend</strong> — only sent to your phone.
               </div>
             </div>
           </div>
@@ -853,131 +894,129 @@ export default function App() {
         {tab === "keys" && (
           <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
             <div>
-              <h2 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>API Keys</h2>
-              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>Your active keys for the SITI Intelligence API.</p>
+              <h2 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 6px" }}>API Keys & Credits</h2>
+              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>Your API key stays in your browser session only — never stored on our servers in plaintext.</p>
             </div>
-            {paymentStatus && (
-              <div style={{ background: C.emerald + "15", border: `1px solid ${C.emerald}40`, borderRadius: 12, padding: "16px 20px" }}>
-                <div style={{ color: C.emerald, fontWeight: 700, marginBottom: 4 }}>🎉 Payment confirmed</div>
-                <div style={{ color: C.muted, fontSize: 13 }}>{paymentStatus.plan} plan activated. Your API key is below.</div>
+
+            {payStatus && (
+              <div style={{ background: C.emerald + "12", border: `1px solid ${C.emerald}40`, borderRadius: 12, padding: "14px 18px" }}>
+                <div style={{ color: C.emerald, fontWeight: 700, marginBottom: 4 }}>🎉 Payment confirmed!</div>
+                <div style={{ color: C.muted, fontSize: 13 }}>
+                  Plan: <strong style={{ color: C.text }}>{payStatus.plan?.toUpperCase()}</strong> · Order: {payStatus.order}<br />
+                  Your API key has been sent to your WhatsApp. Paste it below to activate.
+                </div>
               </div>
             )}
-            <APIKeyCard apiKey={purchasedKey || API_KEY} />
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px" }}>
-              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>Quick Start Endpoints</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {[
-                  { method: "GET",  path: "/health",                  desc: "Kernel health check" },
-                  { method: "GET",  path: "/api/hubs",                desc: "All hub IRP scores" },
-                  { method: "GET",  path: "/api/kernel/status",       desc: "Full kernel state" },
-                  { method: "POST", path: "/api/kernel/reset",        desc: "Upload CSV + analyze" },
-                  { method: "POST", path: "/api/kernel/predict",      desc: "Kalman T+3 prediction" },
-                  { method: "POST", path: "/api/kernel/analyze",      desc: "AI plain-English explanation" },
-                  { method: "POST", path: "/api/payments/create-order", desc: "Cashfree order creation" },
-                  { method: "POST", path: "/api/alerts/test",         desc: "Test Twilio SMS" },
-                ].map((e, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: C.surface, borderRadius: 8 }}>
-                    <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 10, fontWeight: 700, color: e.method === "GET" ? C.teal : C.amber, background: (e.method === "GET" ? C.teal : C.amber) + "20", border: `1px solid ${(e.method === "GET" ? C.teal : C.amber)}40`, borderRadius: 4, padding: "2px 6px", flexShrink: 0 }}>{e.method}</span>
-                    <code style={{ fontFamily: "JetBrains Mono, monospace", fontSize: 12, color: C.accentLt, flex: 1 }}>{e.path}</code>
-                    <span style={{ color: C.muted, fontSize: 12 }}>{e.desc}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+
+            {keyInfo ? (
+              <KeyInfoPanel keyInfo={keyInfo} onLogout={() => setKeyInfo(null)} />
+            ) : (
+              <KeyEntry onKeySet={info => setKeyInfo(info)} />
+            )}
           </div>
         )}
 
         {tab === "docs" && (
-          <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
+          <div style={{ maxWidth: 760, margin: "0 auto", display: "flex", flexDirection: "column", gap: 22 }}>
             <div>
-              <h2 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>Documentation</h2>
-              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>Integration guide for the SITI GSC Kernel API v4.0.</p>
+              <h2 style={{ fontSize: 22, fontWeight: 800, margin: "0 0 6px" }}>Documentation</h2>
+              <p style={{ color: C.muted, fontSize: 13, margin: 0 }}>SITI Intelligence API v5.0 — start command: <code style={{ color: C.accentLt }}>gunicorn backend.server:app</code></p>
             </div>
             {[
               {
                 title: "Authentication",
-                content: `// All requests require X-API-Key header
+                content: `// Send your API key in the X-API-Key header
 fetch("${API_BASE}/api/hubs", {
-  headers: { "X-API-Key": "siti-admin-key-001" }
+  headers: { "X-API-Key": "siti-pilot-xxxxxxxxx" }
 });
-
-// Also accepts Authorization: Bearer <key>
-// For demo access use: siti-admin-key-001`
+// Keys are issued after payment and sent to your WhatsApp
+// Each call debits credits from your balance`
               },
               {
-                title: "POST /api/kernel/reset — Upload & Analyze (Kaggle CSV)",
-                content: `// Auto-maps Kaggle Warehouse_block → hub_id
-// Auto-synthesizes arrival_rate and service_rate from data
-const form = new FormData();
+                title: "POST /api/kernel/reset — Upload & Analyze (auto-maps Kaggle CSV)",
+                content: `const form = new FormData();
 form.append("file", csvFile);  // Kaggle, Delhivery, or custom CSV
 
-const result = await fetch("${API_BASE}/api/kernel/reset", {
+fetch("${API_BASE}/api/kernel/reset", {
   method: "POST",
-  headers: {
-    "X-API-Key":   "your-key",
-    "X-Tenant-ID": "your-org"  // optional multi-tenant
-  },
-  body: form
+  headers: { "X-API-Key": "your-key", "X-Tenant-ID": "your-org" },
+  body: form,
 });
-// Returns: { success: true, summary: { hubs, global_rho, total_rows } }`
+// Cost: 10 credits
+// Returns: { success, summary: { hubs, global_rho, total_leakage } }
+// Fires SMS alert automatically if any hub is critical`
               },
               {
-                title: "POST /api/payments/create-order — Cashfree Integration",
-                content: `// Creates Cashfree order for subscription
-const order = await fetch("${API_BASE}/api/payments/create-order", {
+                title: "GET /api/keys/info — Check Credit Balance",
+                content: `fetch("${API_BASE}/api/keys/info", {
+  headers: { "X-API-Key": "your-key" }
+});
+// Returns:
+// {
+//   key_preview: "siti-pil...xxxx",
+//   plan: "growth",
+//   credits_total: 100000,
+//   credits_used: 1240,
+//   credits_remaining: 98760
+// }`
+              },
+              {
+                title: "POST /api/alerts/test — Test Twilio SMS",
+                content: `fetch("${API_BASE}/api/alerts/test", {
   method: "POST",
   headers: {
     "X-API-Key": "your-key",
     "Content-Type": "application/json"
   },
-  body: JSON.stringify({ plan: "growth", amount: 45999 })
+  body: JSON.stringify({ channel: "sms" })
 });
-// Returns: { payment_session_id, order_id }
-// OR: { fallback: true, whatsapp_url } if Cashfree not configured`
+// Sends test SMS to TWILIO_ALERT_NUMBER
+// Returns diagnosis object if not configured`
               },
               {
-                title: "POST /api/kernel/predict — Kalman Prediction",
-                content: `// Feed delay observations, get T+3 prediction
-const result = await fetch("${API_BASE}/api/kernel/predict", {
-  method: "POST",
-  headers: {
-    "X-API-Key": "your-key",
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    hub_id: "WAREHOUSE-A",
-    observations: [0.62, 0.71, 0.78, 0.82]
-  })
-});
-// Returns: { smoothed, predicted: [t1,t2,t3,t4,t5], kalman_state }`
+                title: "Render Deployment — CORRECT Start Command",
+                content: `# In Render Dashboard → Web Service → Start Command:
+gunicorn backend.server:app --bind 0.0.0.0:\\$PORT --workers 1 --timeout 120
+
+# Build Command:
+pip install -r backend/requirements.txt
+
+# Required Env Vars:
+CORS_ORIGINS=https://your-vercel-app.vercel.app
+API_KEYS=siti-demo-key-001:ADMIN:demo
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxx
+TWILIO_FROM_NUMBER=+1xxxxxxxxxx
+TWILIO_ALERT_NUMBER=+91xxxxxxxxxx
+CASHFREE_APP_ID=your_app_id
+CASHFREE_SECRET_KEY=your_secret
+CASHFREE_ENV=production
+WHATSAPP_NUMBER=918956493671`
               },
-            ].map((section, i) => (
-              <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
-                <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, fontSize: 14, fontWeight: 700 }}>{section.title}</div>
-                <pre style={{ margin: 0, padding: "18px 20px", fontFamily: "JetBrains Mono, monospace", fontSize: 12, color: C.accentLt, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.8 }}>{section.content}</pre>
-              </div>
+            ].map((s, i) => (
+              <Card key={i} style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, fontSize: 13, fontWeight: 700 }}>{s.title}</div>
+                <pre style={{ margin: 0, padding: "16px 18px", fontFamily: "JetBrains Mono, monospace", fontSize: 11, color: C.accentLt, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.8, background: "transparent" }}>{s.content}</pre>
+              </Card>
             ))}
           </div>
         )}
-
-        {tab === "contact" && <ContactSection />}
       </div>
 
       {/* Footer */}
-      <div style={{ background: C.surface, borderTop: `1px solid ${C.border}`, marginTop: 60, padding: "32px 24px" }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+      <footer style={{ background: C.surface, borderTop: `1px solid ${C.border}`, marginTop: 60, padding: "28px 24px" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 14 }}>
           <div>
-            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>SITI Intelligence</div>
-            <div style={{ color: C.muted, fontSize: 12 }}>Logic for the Paradox · Powered by MIMI Kernel v4.0</div>
+            <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 3 }}>SITI Intelligence</div>
+            <div style={{ color: C.muted, fontSize: 11 }}>Logic for the Paradox · Powered by MIMI Kernel v5.0</div>
           </div>
-          <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
-            <a href={`https://wa.me/${WA_NUMBER}?text=${WA_SUPPORT_MSG}`} target="_blank" rel="noreferrer"
-              style={{ color: "#25D366", fontSize: 13, textDecoration: "none", fontWeight: 600 }}>💬 WhatsApp Support</a>
+          <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
+            <a href={`https://wa.me/${WA_NUMBER}?text=${WA_MSG}`} target="_blank" rel="noreferrer" style={{ color: "#25D366", fontSize: 13, textDecoration: "none", fontWeight: 600 }}>💬 WhatsApp</a>
             <a href="mailto:support@siti-intelligence.io" style={{ color: C.muted, fontSize: 13, textDecoration: "none" }}>support@siti-intelligence.io</a>
-            <span style={{ color: C.muted, fontSize: 12 }}>© 2026 SITI Intelligence</span>
+            <span style={{ color: C.dim, fontSize: 12 }}>© 2026 SITI Intelligence</span>
           </div>
         </div>
-      </div>
+      </footer>
     </div>
   );
 }
