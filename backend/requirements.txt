@@ -1,25 +1,23 @@
-# SITI Intelligence Kernel — requirements.txt
-# -----------------------------------------------
-# Pinned for reproducibility on Render Free Tier.
-# DO NOT add emergentintegrations or razorpay — they cause build failures.
-# All external calls use httpx (async-safe, no requests library).
+# SITI Intelligence v5.0 — Backend Dependencies
+# Entry point: gunicorn backend.server:app
+# DO NOT add fastapi — it conflicts with flask-cors
 
-# Web framework
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
+flask==3.0.3
+flask-cors==4.0.1
 gunicorn==22.0.0
 
-# Async HTTP client (replaces requests everywhere)
-httpx==0.27.0
+# Data processing
+pandas==2.2.2
+numpy==1.26.4
 
-# Supabase client
+# HTTP client (Cashfree, OpenRouter)
+httpx==0.27.2
+
+# Environment
+python-dotenv==1.0.1
+
+# Supabase (optional — gracefully skipped if env vars not set)
 supabase==2.4.2
 
-# Data validation
-pydantic==2.7.1
-
-# Async support
-anyio==4.3.0
-
-# Production ASGI server extras
-python-multipart==0.0.9
+# Twilio SMS / WhatsApp (optional — gracefully skipped)
+twilio==9.2.3
