@@ -97,7 +97,7 @@ function CalibrationOverlay() {
 function PaymentModal({ onClose }) {
   const plans = [
     { name: "PILOT", price: "₹29,999/mo", desc: "1 hub, 50K shipments/mo, email support", color: C.blue },
-    { name: "OPERATOR", price: "₹74,999/mo", desc: "5 hubs, 500K shipments/mo, WhatsApp alerts", color: C.gold },
+    { name: "OPERATOR", price: "₹74,999/mo", desc: "5 hubs, 500K shipments/mo, priority support", color: C.gold },
     { name: "ENTERPRISE", price: "Custom", desc: "Unlimited hubs, SLA, dedicated onboarding", color: C.green },
   ];
 
@@ -116,10 +116,7 @@ function PaymentModal({ onClose }) {
               <div style={{ fontSize: 8.5, color: C.textDim, lineHeight: 1.5 }}>{p.desc}</div>
               <button
                 onClick={() => {
-                  const msg = p.name === "ENTERPRISE"
-                    ? "Hi, I'm interested in SITI Intelligence Enterprise. Please contact me."
-                    : `I want to start the ${p.name} plan at ${p.price}`;
-                  window.open(`https://wa.me/917XXXXXXXXX?text=${encodeURIComponent(msg)}`);
+                  alert("Redirecting to Razorpay Secure Gateway...");
                 }}
                 style={{ marginTop: 10, width: "100%", background: "none", border: `1px solid ${p.color}`, color: p.color, fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", padding: "5px 0", cursor: "pointer" }}>
                 {p.name === "ENTERPRISE" ? "CONTACT US" : "BUY NOW →"}
@@ -816,7 +813,7 @@ export default function SITIDashboard() {
             { label: "λ TOTAL/HR", val: kState?.total_lambda?.toFixed(0) ?? "—", color: C.blue },
             { label: "SAVED", val: `$${ticker.revenue_saved?.toFixed(2)}`, color: C.green },
             { label: "EXPOSURE", val: "$2,810,000", color: C.red },
-            { label: "API", val: isConnected ? "ONLINE" : "OFFLINE", color: isConnected ? C.green : C.red },
+            { label: "SYSTEM STATUS", val: isConnected ? "RENDER-ACTIVE" : "RENDER-DOWN", color: isConnected ? C.green : C.red },
           ].map(item => (
             <div key={item.label} style={{ textAlign: "center" }}>
               <div style={{ fontSize: 7, color: C.textDim, letterSpacing: "0.1em", marginBottom: 2 }}>{item.label}</div>

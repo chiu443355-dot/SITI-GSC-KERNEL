@@ -118,7 +118,7 @@ def _get_session(key: str) -> dict:
 # ─── P0-3: WEBHOOK SIGNATURE VERIFICATION ────────────────────────────────────
 RAZORPAY_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 CASHFREE_WEBHOOK_SECRET = os.environ.get("CASHFREE_WEBHOOK_SECRET", "")
-ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "changeme")
+ADMIN_SECRET = os.environ.get("SITI_ADMIN_SECRET", "changeme") # Match Render Env
 SENDGRID_KEY = os.environ.get("SENDGRID_KEY", "")
 
 # ─── API KEY LOADING ──────────────────────────────────────────────────────────
@@ -128,31 +128,32 @@ def _load_env_keys():
         pair = pair.strip()
         if ":" in pair:
             key, role = pair.split(":", 1)
+            key = key.strip()
             role = role.strip().upper()
             if role in ROLES:
-                _api_keys[key.strip()] = {"role": role, "client": "ENV_PROVISIONED", "active": True}
+                # Store both for legacy, but hash it
+                key_hash = hashlib.sha256(key.encode()).hexdigest()
+                _api_keys[key] = {"role": role, "client": "ENV_PROVISIONED", "active": True, "hash": key_hash}
 
 # ─── P0-4: NO ANONYMOUS ACCESS ───────────────────────────────────────────────
 def _verify_api_key(x_api_key: str = Header(default=None)) -> dict:
     """
     Dependency: validate API key from X-API-KEY header. No anonymous fallback.
-    FIX 2: Admin bypass and Supabase lookup.
+    FIX 2 + Security: Hash-only verification.
     """
     if not x_api_key:
         raise HTTPException(status_code=401, detail="X-API-KEY header required")
 
-    # Local memory check first (legacy)
-    key_data = _api_keys.get(x_api_key)
-    if key_data and key_data.get("active"):
-        # Admin bypass
-        if key_data.get("client") in ADMIN_TENANT_IDS:
-            return key_data
-        return key_data
+    key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
 
-    # FIX 2: Supabase lookup with hash
+    # Local memory check (env provisioned keys)
+    for k, data in _api_keys.items():
+        if data.get("hash") == key_hash and data.get("active"):
+            return data
+
+    # Supabase lookup
     if supabase:
         try:
-            key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()
             res = supabase.table("api_keys") \
                 .select("tenant_id, is_active, plan, role") \
                 .eq("key_hash", key_hash) \
@@ -160,10 +161,8 @@ def _verify_api_key(x_api_key: str = Header(default=None)) -> dict:
                 .execute()
             if res.data:
                 tenant = res.data
-                # Admin bypass
-                if tenant["tenant_id"] in ADMIN_TENANT_IDS:
-                    return {"role": tenant.get("role", "ADMIN"), "client": tenant["tenant_id"], "active": True}
-                if tenant["is_active"]:
+                # Admin bypass or active tenant
+                if tenant["tenant_id"] in ADMIN_TENANT_IDS or tenant["is_active"]:
                     return {"role": tenant.get("role", "OPERATOR"), "client": tenant["tenant_id"], "active": True}
         except Exception as e:
             logger.warning(f"Supabase key verify failed: {e}")
@@ -1305,32 +1304,45 @@ async def create_api_key(data: CreateKeyRequest, key_data: dict = Depends(_requi
         raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(ROLES)}")
 
     import secrets
-    new_key = f"siti-{data.client_name.lower().replace(' ', '-')}-{secrets.token_hex(8)}"
-    _api_keys[new_key] = {
+    new_key = f"siti-{data.client_name.lower().replace(' ', '-')}-{secrets.token_hex(12)}"
+    key_hash = hashlib.sha256(new_key.encode()).hexdigest()
+
+    # Store only hash in memory
+    _api_keys[new_key[:12] + "..."] = {
         "role": data.role.upper(),
         "client": data.client_name,
         "active": True,
+        "hash": key_hash,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "notes": data.notes,
     }
 
-    # Persist to MongoDB if available
+    # Persist only hash to MongoDB if available
     if db is not None:
         try:
             await db.api_keys.insert_one({
-                "key": new_key, "role": data.role.upper(), "client": data.client_name,
+                "key_hash": key_hash, "role": data.role.upper(), "client": data.client_name,
                 "active": True, "created_at": datetime.now(timezone.utc).isoformat(),
                 "notes": data.notes,
             })
         except Exception as e:
             logger.warning(f"Failed to persist key to MongoDB: {e}")
 
+    # Persist only hash to Supabase if available
+    if supabase:
+        try:
+            supabase.table("api_keys").insert({
+                "tenant_id": data.client_name, "key_hash": key_hash, "role": data.role.upper(),
+                "active": True, "is_active": True, "created_at": "now()"
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Failed to persist key to Supabase: {e}")
+
     return {
         "success": True,
-        "api_key": new_key,
+        "api_key": new_key, # Plaintext returned ONLY ONCE
         "role": data.role.upper(),
         "client": data.client_name,
-        "message": f"API key provisioned for {data.client_name}.",
+        "message": f"API key provisioned for {data.client_name}. Copy it now; it will never be shown again.",
         "permissions": list(ROLE_PERMISSIONS.get(data.role.upper(), set())),
     }
 
@@ -1350,10 +1362,12 @@ async def revoke_api_key(key_to_revoke: str, key_data: dict = Depends(_require_r
 
 @api_router.get("/admin/list-keys")
 async def list_keys(key_data: dict = Depends(_require_role({"ADMIN"}))):
+    # Masking keys in UI
     return {
         "keys": [
             {"client": v["client"], "role": v["role"], "active": v["active"],
-             "key_prefix": k[:12] + "...", "created_at": v.get("created_at", "N/A")}
+             "key_masked": "siti_..." + v.get("hash", "")[:8] + "XXXX",
+             "created_at": v.get("created_at", "N/A")}
             for k, v in _api_keys.items()
         ]
     }
@@ -1483,23 +1497,22 @@ async def razorpay_webhook(request: Request):
 
     import secrets
     client_name = email.split("@")[0] if email else contact or "new_client"
-    new_key = f"siti-{client_name.lower().replace('.', '-')[:20]}-{secrets.token_hex(8)}"
+    new_key = f"siti-{client_name.lower().replace('.', '-')[:20]}-{secrets.token_hex(12)}"
+    key_hash = hashlib.sha256(new_key.encode()).hexdigest()
 
-    _api_keys[new_key] = {
+    _api_keys[new_key[:12] + "..."] = {
         "role": plan_data["role"],
         "client": client_name,
         "active": True,
+        "hash": key_hash,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "notes": f"Auto-provisioned. Payment: {payment_id}. Plan: {plan_data['display']}",
-        "payment_id": payment_id,
-        "plan": plan,
     }
 
     # P1-8: MongoDB write MUST succeed — raise on failure so Razorpay retries
     if db is not None:
         try:
             await db.api_keys.insert_one({
-                "key": new_key, "role": plan_data["role"], "client": client_name,
+                "key_hash": key_hash, "role": plan_data["role"], "client": client_name,
                 "active": True, "payment_id": payment_id, "plan": plan,
                 "amount_paise": amount, "email": email,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1564,7 +1577,7 @@ async def get_plans():
                 "id": "operator", "name": "OPERATOR",
                 "price_inr": 74999, "price_display": "₹74,999/mo",
                 "hubs": 5, "shipments_per_month": "500,000",
-                "features": ["5 hubs monitored", "WhatsApp alerts via Twilio", "Live API stream (SSE)", "Priority support"],
+                "features": ["5 hubs monitored", "Real-time stream (SSE)", "Priority support"],
                 "razorpay_plan_id": os.environ.get("RAZORPAY_OPERATOR_PLAN_ID", ""),
             },
             {
